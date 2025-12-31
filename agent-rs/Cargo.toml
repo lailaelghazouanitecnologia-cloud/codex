@@ -1,0 +1,53 @@
+[workspace]
+members = [
+    "common",
+    "config",
+    "protocol",
+    "tools",
+    "exec",
+    "core",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Agent IA Team"]
+
+[workspace.dependencies]
+# Internal crates
+agent-common = { path = "common" }
+agent-config = { path = "config" }
+agent-protocol = { path = "protocol" }
+agent-tools = { path = "tools" }
+agent-exec = { path = "exec" }
+agent-core = { path = "core" }
+
+# External dependencies - minimal set
+anyhow = "1"
+thiserror = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+async-channel = "2.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+dirs = "5"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+expect_used = "deny"
+unwrap_used = "deny"
+panic = "deny"
+todo = "warn"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+codegen-units = 1
