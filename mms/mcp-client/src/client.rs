@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use mms_mcp_types::{
-    CallToolResult, Implementation, InitializeRequestParams,
-    InitializeResult, ListResourcesResult, MCP_SCHEMA_VERSION, Tool,
+    CallToolResult, GetPromptResult, Implementation, InitializeRequestParams,
+    InitializeResult, ListPromptsResult, ListResourcesResult, MCP_SCHEMA_VERSION,
+    Prompt, Tool,
 };
 use tokio::sync::RwLock;
 
@@ -145,6 +146,69 @@ impl McpClient {
         entry.connection.read_resource(uri).await
     }
 
+    pub async fn list_prompts(&self, server_name: &str) -> Result<ListPromptsResult> {
+        let servers = self.servers.read().await;
+
+        let entry = servers.get(server_name).ok_or_else(|| {
+            anyhow!("Server '{}' not found", server_name)
+        })?;
+
+        entry.connection.list_prompts().await
+    }
+
+    pub async fn list_all_prompts(&self) -> HashMap<String, Prompt> {
+        let servers = self.servers.read().await;
+        let mut all_prompts = HashMap::new();
+
+        for (server_name, entry) in servers.iter() {
+            if let Ok(result) = entry.connection.list_prompts().await {
+                for prompt in result.prompts {
+                    let qualified_name = build_qualified_tool_name(server_name, &prompt.name);
+                    all_prompts.insert(qualified_name, prompt);
+                }
+            }
+        }
+
+        all_prompts
+    }
+
+    pub async fn get_prompt(
+        &self,
+        server_name: &str,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<GetPromptResult> {
+        let servers = self.servers.read().await;
+
+        let entry = servers.get(server_name).ok_or_else(|| {
+            anyhow!("Server '{}' not found", server_name)
+        })?;
+
+        entry.connection.get_prompt(name, arguments).await
+    }
+
+    pub async fn ping(&self, server_name: &str) -> Result<()> {
+        let servers = self.servers.read().await;
+
+        let entry = servers.get(server_name).ok_or_else(|| {
+            anyhow!("Server '{}' not found", server_name)
+        })?;
+
+        entry.connection.ping().await
+    }
+
+    pub async fn ping_all(&self) -> HashMap<String, Result<()>> {
+        let servers = self.servers.read().await;
+        let mut results = HashMap::new();
+
+        for (name, entry) in servers.iter() {
+            let result = entry.connection.ping().await;
+            results.insert(name.clone(), result);
+        }
+
+        results
+    }
+
     pub async fn server_count(&self) -> usize {
         let servers = self.servers.read().await;
         servers.len()
@@ -153,5 +217,15 @@ impl McpClient {
     pub async fn server_names(&self) -> Vec<String> {
         let servers = self.servers.read().await;
         servers.keys().cloned().collect()
+    }
+
+    pub async fn has_capability(&self, server_name: &str, capability: &str) -> Result<bool> {
+        let servers = self.servers.read().await;
+
+        let entry = servers.get(server_name).ok_or_else(|| {
+            anyhow!("Server '{}' not found", server_name)
+        })?;
+
+        Ok(entry.connection.has_capability(capability).await)
     }
 }

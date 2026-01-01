@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use anyhow::{anyhow, Result};
 use mms_mcp_types::{
-    CallToolRequestParams, CallToolResult, InitializeRequestParams, InitializeResult,
-    JsonRpcMessage, JsonRpcRequest, ListResourcesResult, ListToolsResult,
+    CallToolRequestParams, CallToolResult, GetPromptRequestParams, GetPromptResult,
+    InitializeRequestParams, InitializeResult, JsonRpcMessage, JsonRpcNotification,
+    JsonRpcRequest, ListPromptsResult, ListResourcesResult, ListToolsResult,
     ReadResourceRequestParams, ReadResourceResult, RequestId,
 };
 use tokio::sync::Mutex;
@@ -112,6 +113,73 @@ impl<T: Transport> McpConnection<T> {
         Ok(read_result)
     }
 
+    pub async fn list_prompts(&self) -> Result<ListPromptsResult> {
+        let result = self.send_request("prompts/list", serde_json::json!({})).await?;
+        let prompts: ListPromptsResult = serde_json::from_value(result)?;
+        Ok(prompts)
+    }
+
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<GetPromptResult> {
+        let params = GetPromptRequestParams {
+            name: name.to_string(),
+            arguments,
+        };
+        let params_json = serde_json::to_value(&params)?;
+        let result = self.send_request("prompts/get", params_json).await?;
+        let prompt_result: GetPromptResult = serde_json::from_value(result)?;
+        Ok(prompt_result)
+    }
+
+    pub async fn ping(&self) -> Result<()> {
+        self.send_request("ping", serde_json::json!({})).await?;
+        Ok(())
+    }
+
+    pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
+        let params = serde_json::json!({ "uri": uri });
+        self.send_request("resources/subscribe", params).await?;
+        Ok(())
+    }
+
+    pub async fn unsubscribe_resource(&self, uri: &str) -> Result<()> {
+        let params = serde_json::json!({ "uri": uri });
+        self.send_request("resources/unsubscribe", params).await?;
+        Ok(())
+    }
+
+    pub async fn send_notification(&self, method: &str, params: serde_json::Value) -> Result<()> {
+        let notification = JsonRpcNotification::new(method).with_params(params);
+        let transport = self.transport.lock().await;
+        transport.send(JsonRpcMessage::Notification(notification)).await?;
+        Ok(())
+    }
+
+    pub async fn notify_cancelled(&self, request_id: RequestId, reason: Option<String>) -> Result<()> {
+        let params = serde_json::json!({
+            "requestId": request_id,
+            "reason": reason
+        });
+        self.send_notification("notifications/cancelled", params).await
+    }
+
+    pub async fn notify_progress(
+        &self,
+        progress_token: serde_json::Value,
+        progress: f64,
+        total: Option<f64>,
+    ) -> Result<()> {
+        let params = serde_json::json!({
+            "progressToken": progress_token,
+            "progress": progress,
+            "total": total
+        });
+        self.send_notification("notifications/progress", params).await
+    }
+
     pub async fn server_info(&self) -> Option<InitializeResult> {
         let guard = self.server_info.lock().await;
         guard.clone()
@@ -120,5 +188,20 @@ impl<T: Transport> McpConnection<T> {
     pub async fn is_initialized(&self) -> bool {
         let guard = self.server_info.lock().await;
         guard.is_some()
+    }
+
+    pub async fn has_capability(&self, capability: &str) -> bool {
+        let guard = self.server_info.lock().await;
+        if let Some(info) = guard.as_ref() {
+            let caps = &info.capabilities;
+            match capability {
+                "tools" => caps.tools.is_some(),
+                "resources" => caps.resources.is_some(),
+                "prompts" => caps.prompts.is_some(),
+                _ => false,
+            }
+        } else {
+            false
+        }
     }
 }
