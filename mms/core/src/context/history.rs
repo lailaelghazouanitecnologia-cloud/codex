@@ -8,9 +8,10 @@
 
 use std::collections::HashSet;
 
-use super::item::{ResponseItem, FunctionCallItem, FunctionOutputItem, MessageRole};
-use super::token::{TokenUsageInfo, RateLimitSnapshot};
-use super::truncation::{TruncationPolicy, ModelLimits};
+use super::compaction::{CompactionConfig, CompactionResult, ContextCompactor};
+use super::item::{FunctionCallItem, FunctionOutputItem, MessageRole, ResponseItem};
+use super::token::{RateLimitSnapshot, TokenUsageInfo};
+use super::truncation::{ModelLimits, TruncationPolicy};
 
 /// Manages conversation history with token tracking
 #[derive(Debug, Default)]
@@ -271,5 +272,31 @@ impl ContextManager {
     /// Set truncation policy for outputs
     pub fn set_output_policy(&mut self, policy: TruncationPolicy) {
         self.output_policy = policy;
+    }
+
+    /// Perform context compaction to reduce token usage
+    ///
+    /// This summarizes older items while preserving recent context.
+    pub fn compact(&mut self) -> CompactionResult {
+        let config = CompactionConfig::with_target(self.model_limits.compaction_target());
+        self.compact_with_config(config)
+    }
+
+    /// Perform context compaction with custom configuration
+    pub fn compact_with_config(&mut self, config: CompactionConfig) -> CompactionResult {
+        let compactor = ContextCompactor::new(config);
+        let history = std::mem::take(&mut self.items);
+        let (new_history, result) = compactor.compact(history);
+        self.items = new_history;
+        result
+    }
+
+    /// Auto-compact if needed, returning the result if compaction was performed
+    pub fn auto_compact(&mut self) -> Option<CompactionResult> {
+        if self.should_compact() {
+            Some(self.compact())
+        } else {
+            None
+        }
     }
 }

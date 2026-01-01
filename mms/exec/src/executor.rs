@@ -29,6 +29,16 @@ impl Executor {
         }
     }
 
+    /// Get the config
+    pub fn config(&self) -> &Arc<Config> {
+        &self.config
+    }
+
+    /// Get the tool router
+    pub fn router(&self) -> &Arc<ToolRouter> {
+        &self.router
+    }
+
     pub async fn execute_tool_calls(
         &self,
         turn: &mut Turn,

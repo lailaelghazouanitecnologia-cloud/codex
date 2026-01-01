@@ -259,6 +259,14 @@ impl ModelLimits {
     pub fn tool_output_policy(&self) -> TruncationPolicy {
         TruncationPolicy::Bytes(self.tool_output_bytes)
     }
+
+    /// Get the target token count after compaction
+    ///
+    /// This is typically a fraction of the context window to leave room for new content.
+    pub fn compaction_target(&self) -> u64 {
+        // Target is 50% of the auto-compact threshold
+        self.auto_compact_threshold / 2
+    }
 }
 
 impl Default for ModelLimits {

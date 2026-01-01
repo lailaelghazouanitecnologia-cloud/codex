@@ -239,9 +239,13 @@ impl Processor {
             }
 
             // Check if we should auto-compact
-            if self.context.should_compact() {
-                debug!("Context auto-compaction triggered");
-                // TODO: Implement context compaction
+            if let Some(result) = self.context.auto_compact() {
+                info!(
+                    items_removed = result.items_removed,
+                    tokens_before = result.tokens_before,
+                    tokens_after = result.tokens_after,
+                    "Context auto-compaction performed"
+                );
             }
 
             // Call the LLM with retry
@@ -577,71 +581,108 @@ impl Processor {
         turn: &mut Turn,
         tool_calls: &[ProviderToolCall],
     ) -> AgentResult<Vec<ToolOutput>> {
-        // For now, execute sequentially with approval
-        // TODO: Implement true parallel execution with approval
-        let mut outputs = Vec::with_capacity(tool_calls.len());
+        if tool_calls.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Phase 1: Gather approval decisions for all tools that need it
+        let mut approval_results: HashMap<String, ReviewDecision> = HashMap::new();
+        let mut approval_handles = Vec::new();
 
         for tc in tool_calls {
-            // Check cancellation
             if self.cancel_token.is_cancelled() {
-                debug!("Tool execution cancelled");
                 break;
             }
 
-            // Check if approval is required
             let needs_approval = self.needs_approval(&tc.function.name);
 
             if needs_approval {
-                // Request approval
                 let request_id = format!("{}_{}", self.session_id, tc.id);
+                let tool_name = tc.function.name.clone();
+                let arguments = tc.function.arguments.clone();
+                let call_id = tc.id.clone();
+                let approval_manager = self.approval_manager.clone();
 
                 // Emit approval request event
                 self.emit(EventMessage::ApprovalRequired(ApprovalRequiredEvent {
                     request_id: request_id.clone(),
-                    tool_name: tc.function.name.clone(),
-                    description: format!("Execute {} with args: {}", tc.function.name, tc.function.arguments),
-                    risk_level: RiskLevel::Medium,
+                    tool_name: tool_name.clone(),
+                    description: format!("Execute {} with args: {}", tool_name, arguments),
+                    risk_level: self.assess_risk(&tool_name),
                 }))
                 .await?;
 
-                // Wait for approval
-                let decision = request_command_approval(
-                    &self.approval_manager,
-                    request_id.clone(),
-                    tc.function.name.clone(),
-                    vec![tc.function.arguments.clone()],
-                    std::env::current_dir()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_default(),
-                    DEFAULT_APPROVAL_TIMEOUT,
-                )
-                .await;
+                // Spawn approval request
+                let handle = tokio::spawn(async move {
+                    let decision = request_command_approval(
+                        &approval_manager,
+                        request_id,
+                        tool_name,
+                        vec![arguments],
+                        std::env::current_dir()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        DEFAULT_APPROVAL_TIMEOUT,
+                    )
+                    .await;
+                    (call_id, decision)
+                });
 
-                match decision {
-                    ReviewDecision::Approved => {
+                approval_handles.push(handle);
+            }
+        }
+
+        // Wait for all approval decisions with cancellation support
+        for handle in approval_handles {
+            tokio::select! {
+                biased;
+
+                _ = self.cancel_token.cancelled() => {
+                    debug!("Approval wait cancelled");
+                    break;
+                }
+
+                result = handle => {
+                    if let Ok((call_id, decision)) = result {
+                        approval_results.insert(call_id, decision);
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Build list of approved tools
+        let mut approved_calls: Vec<(String, ExecToolCall)> = Vec::new();
+        let mut rejected_outputs: Vec<ToolOutput> = Vec::new();
+
+        for tc in tool_calls {
+            let needs_approval = self.needs_approval(&tc.function.name);
+
+            if needs_approval {
+                match approval_results.get(&tc.id) {
+                    Some(ReviewDecision::Approved) => {
                         debug!(tool = %tc.function.name, "Tool approved");
                     }
-                    ReviewDecision::Rejected => {
+                    Some(ReviewDecision::Rejected) => {
                         debug!(tool = %tc.function.name, "Tool rejected");
-                        outputs.push(ToolOutput::error(
+                        rejected_outputs.push(ToolOutput::error(
                             &tc.id,
                             "Tool execution rejected by user",
                             0,
                         ));
                         continue;
                     }
-                    ReviewDecision::TimedOut => {
+                    Some(ReviewDecision::TimedOut) => {
                         debug!(tool = %tc.function.name, "Approval timed out");
-                        outputs.push(ToolOutput::error(
+                        rejected_outputs.push(ToolOutput::error(
                             &tc.id,
                             "Approval request timed out",
                             0,
                         ));
                         continue;
                     }
-                    ReviewDecision::Cancelled => {
-                        debug!(tool = %tc.function.name, "Approval cancelled");
-                        outputs.push(ToolOutput::error(
+                    Some(ReviewDecision::Cancelled) | None => {
+                        debug!(tool = %tc.function.name, "Approval cancelled or missing");
+                        rejected_outputs.push(ToolOutput::error(
                             &tc.id,
                             "Tool execution cancelled",
                             0,
@@ -651,20 +692,73 @@ impl Processor {
                 }
             }
 
-            // Parse arguments
+            // Parse arguments and add to approved list
             let arguments: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or_else(|_| serde_json::json!({}));
-
-            // Create the tool call for the executor
             let exec_call = ExecToolCall::new(&tc.id, &tc.function.name, arguments);
-
-            // Execute via executor
-            let result = self.executor.execute_tool_calls(turn, vec![exec_call]).await?;
-
-            outputs.extend(result);
+            approved_calls.push((tc.id.clone(), exec_call));
         }
 
+        // Phase 3: Execute approved tools in parallel
+        if approved_calls.is_empty() {
+            return Ok(rejected_outputs);
+        }
+
+        let call_ids: Vec<String> = approved_calls.iter().map(|(id, _)| id.clone()).collect();
+        let call_map: HashMap<String, ExecToolCall> = approved_calls.into_iter().collect();
+
+        let executor = self.executor.clone();
+
+        let parallel_results = self.parallel_executor.execute_with_cancellation(
+            call_ids,
+            move |call_id, _index| {
+                let exec = executor.clone();
+                let call = call_map.get(&call_id).cloned();
+                async move {
+                    if let Some(tool_call) = call {
+                        // Execute the tool call directly via router
+                        let ctx = mms_tools::ToolContext::new(exec.config().clone());
+                        match exec.router().execute(&ctx, tool_call).await {
+                            Ok(output) => output,
+                            Err(e) => ToolOutput::error(&call_id, &e.to_string(), 0),
+                        }
+                    } else {
+                        ToolOutput::error(&call_id, "Tool call not found", 0)
+                    }
+                }
+            },
+            &self.cancel_token,
+        ).await;
+
+        // Combine results
+        let mut outputs = rejected_outputs;
+        for result in parallel_results {
+            if let Some(output) = result.result {
+                outputs.push(output);
+            } else if result.cancelled {
+                outputs.push(ToolOutput::error(&result.call_id, "Execution cancelled", 0));
+            }
+        }
+
+        // Sort by original order
+        let id_order: HashMap<String, usize> = tool_calls
+            .iter()
+            .enumerate()
+            .map(|(i, tc)| (tc.id.clone(), i))
+            .collect();
+        outputs.sort_by_key(|o| id_order.get(&o.call_id).copied().unwrap_or(usize::MAX));
+
         Ok(outputs)
+    }
+
+    /// Assess risk level for a tool
+    fn assess_risk(&self, tool_name: &str) -> RiskLevel {
+        match tool_name {
+            "shell" | "bash" | "execute" => RiskLevel::High,
+            "write" | "write_file" => RiskLevel::Medium,
+            "read" | "read_file" => RiskLevel::Low,
+            _ => RiskLevel::Medium,
+        }
     }
 
     /// Check if a tool requires approval
