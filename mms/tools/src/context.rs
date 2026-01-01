@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use mms_config::Config;
 
+#[derive(Clone)]
 pub struct ToolContext {
     config: Arc<Config>,
     cwd: PathBuf,
