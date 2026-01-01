@@ -5,6 +5,9 @@ pub enum AgentError {
     #[error("configuration error: {message}")]
     Config { message: String },
 
+    #[error("io error: {message}")]
+    IoError { message: String },
+
     #[error("io error: {source}")]
     Io {
         #[from]
@@ -13,6 +16,15 @@ pub enum AgentError {
 
     #[error("serialization error: {message}")]
     Serialization { message: String },
+
+    #[error("parse error: {message}")]
+    Parse { message: String },
+
+    #[error("network error: {message}")]
+    Network { message: String },
+
+    #[error("execution error: {message}")]
+    Execution { message: String },
 
     #[error("tool execution failed: {tool_name} - {message}")]
     ToolExecution { tool_name: String, message: String },
@@ -43,8 +55,32 @@ impl AgentError {
         }
     }
 
+    pub fn io_error(message: impl Into<String>) -> Self {
+        Self::IoError {
+            message: message.into(),
+        }
+    }
+
     pub fn serialization(message: impl Into<String>) -> Self {
         Self::Serialization {
+            message: message.into(),
+        }
+    }
+
+    pub fn parse(message: impl Into<String>) -> Self {
+        Self::Parse {
+            message: message.into(),
+        }
+    }
+
+    pub fn network(message: impl Into<String>) -> Self {
+        Self::Network {
+            message: message.into(),
+        }
+    }
+
+    pub fn execution(message: impl Into<String>) -> Self {
+        Self::Execution {
             message: message.into(),
         }
     }

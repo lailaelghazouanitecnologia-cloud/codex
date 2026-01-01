@@ -9,6 +9,12 @@ members = [
     "mcp-types",
     "mcp-client",
     "cli",
+    "providers",
+    "skills",
+    "embedding",
+    "context",
+    "sandbox",
+    "file-search",
 ]
 resolver = "2"
 
@@ -27,6 +33,12 @@ mms-exec = { path = "exec" }
 mms-core = { path = "core" }
 mms-mcp-types = { path = "mcp-types" }
 mms-mcp-client = { path = "mcp-client" }
+mms-providers = { path = "providers" }
+mms-skills = { path = "skills" }
+mms-embedding = { path = "embedding" }
+mms-context = { path = "context" }
+mms-sandbox = { path = "sandbox" }
+mms-file-search = { path = "file-search" }
 
 anyhow = "1"
 thiserror = "2.0"
@@ -41,8 +53,14 @@ chrono = { version = "0.4", features = ["serde"] }
 toml = "0.8"
 dirs = "5"
 clap = { version = "4", features = ["derive"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 futures = "0.3"
+async-trait = "0.1"
+bytes = "1"
+tokio-stream = "0.1"
+regex = "1"
+glob = "0.3"
+walkdir = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
