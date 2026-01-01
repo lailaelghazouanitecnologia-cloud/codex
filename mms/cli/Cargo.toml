@@ -1,0 +1,24 @@
+[package]
+name = "mms"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mms"
+path = "src/main.rs"
+
+[dependencies]
+mms-common.workspace = true
+mms-config.workspace = true
+mms-protocol.workspace = true
+mms-core.workspace = true
+mms-mcp-types.workspace = true
+mms-mcp-client.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true

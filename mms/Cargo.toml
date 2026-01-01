@@ -1,0 +1,59 @@
+[workspace]
+members = [
+    "common",
+    "config",
+    "protocol",
+    "tools",
+    "exec",
+    "core",
+    "mcp-types",
+    "mcp-client",
+    "cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["MMS Team"]
+
+[workspace.dependencies]
+mms-common = { path = "common" }
+mms-config = { path = "config" }
+mms-protocol = { path = "protocol" }
+mms-tools = { path = "tools" }
+mms-exec = { path = "exec" }
+mms-core = { path = "core" }
+mms-mcp-types = { path = "mcp-types" }
+mms-mcp-client = { path = "mcp-client" }
+
+anyhow = "1"
+thiserror = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+async-channel = "2.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+toml = "0.8"
+dirs = "5"
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json"] }
+futures = "0.3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+expect_used = "deny"
+unwrap_used = "deny"
+panic = "deny"
+todo = "warn"
+
+[profile.release]
+lto = "fat"
+strip = "symbols"
+codegen-units = 1
