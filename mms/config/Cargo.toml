@@ -9,6 +9,7 @@ mms-common.workspace = true
 mms-execpolicy.workspace = true
 mms-linux-sandbox.workspace = true
 mms-protocol.workspace = true
+mms-providers.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

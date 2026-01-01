@@ -23,6 +23,9 @@ pub enum AgentError {
     #[error("network error: {message}")]
     Network { message: String },
 
+    #[error("provider error: {message}")]
+    Provider { message: String },
+
     #[error("execution error: {message}")]
     Execution { message: String },
 
@@ -75,6 +78,12 @@ impl AgentError {
 
     pub fn network(message: impl Into<String>) -> Self {
         Self::Network {
+            message: message.into(),
+        }
+    }
+
+    pub fn provider(message: impl Into<String>) -> Self {
+        Self::Provider {
             message: message.into(),
         }
     }

@@ -1,6 +1,7 @@
 use mms_common::AgentResult;
 use mms_linux_sandbox::{DiskAccess, NetworkAccess, SandboxPolicy};
 use mms_protocol::{ApprovalMode, SessionConfig};
+use mms_providers::{Provider, ProviderConfig as ProviderSpec, ProviderKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +22,9 @@ pub struct Config {
     pub tools: ToolsConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    /// Custom instructions to add to system prompt
+    #[serde(default)]
+    pub custom_instructions: Option<String>,
 }
 
 impl Config {
@@ -54,6 +58,38 @@ impl Config {
         self.provider_id = provider_id.into();
         self
     }
+
+    /// Build a Provider instance from the current configuration
+    pub fn build_provider(&self) -> AgentResult<Provider> {
+        let config = self.get_provider()?;
+
+        // Determine the provider kind from the ID or base_url
+        let kind = match self.provider_id.to_lowercase().as_str() {
+            "openai" => ProviderKind::OpenAI,
+            "anthropic" | "claude" => ProviderKind::Anthropic,
+            "groq" => ProviderKind::Groq,
+            "ollama" => ProviderKind::Ollama,
+            _ => {
+                // Try to guess from base_url
+                if config.base_url.contains("openai.com") {
+                    ProviderKind::OpenAI
+                } else if config.base_url.contains("anthropic.com") {
+                    ProviderKind::Anthropic
+                } else if config.base_url.contains("groq.com") {
+                    ProviderKind::Groq
+                } else {
+                    ProviderKind::Custom
+                }
+            }
+        };
+
+        let spec = ProviderSpec::new(kind)
+            .with_base_url(&config.base_url)
+            .with_model(&config.default_model)
+            .with_timeout(self.timeout_ms / 1000);
+
+        Ok(Provider::new(spec))
+    }
 }
 
 impl Default for Config {
@@ -84,6 +120,7 @@ impl Default for Config {
             features: Features::default(),
             tools: ToolsConfig::default(),
             sandbox: SandboxConfig::default(),
+            custom_instructions: None,
         }
     }
 }

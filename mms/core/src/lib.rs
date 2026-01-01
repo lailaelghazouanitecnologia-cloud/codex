@@ -2,10 +2,12 @@
 #![forbid(unsafe_code)]
 
 mod agent;
+mod processor;
 mod session;
 mod state;
 
 pub use agent::*;
+pub use processor::{spawn_processor, Processor};
 pub use session::*;
 pub use state::*;
 

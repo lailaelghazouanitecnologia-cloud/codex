@@ -956,6 +956,7 @@ dependencies = [
  "mms-execpolicy",
  "mms-linux-sandbox",
  "mms-protocol",
+ "mms-providers",
  "serde",
  "serde_json",
  "toml",
@@ -977,10 +978,12 @@ name = "mms-core"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "futures",
  "mms-common",
  "mms-config",
  "mms-exec",
  "mms-protocol",
+ "mms-providers",
  "mms-tools",
  "serde",
  "serde_json",

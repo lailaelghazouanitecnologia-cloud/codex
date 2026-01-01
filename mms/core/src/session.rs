@@ -9,14 +9,15 @@ use mms_tools::{ToolRegistry, ToolRouter};
 use async_channel::{Receiver, Sender};
 use std::sync::Arc;
 
+use crate::processor::spawn_processor;
 use crate::state::StateManager;
 
 pub struct Session {
     id: SessionId,
     config: Arc<Config>,
     state: Arc<StateManager>,
-    #[allow(dead_code)]
     executor: Arc<Executor>,
+    registry: Arc<ToolRegistry>,
     submission_tx: Sender<Submission>,
     submission_rx: Receiver<Submission>,
     event_tx: Sender<Event>,
@@ -33,7 +34,8 @@ impl Session {
         let (event_tx, event_rx) = async_channel::unbounded();
         let (internal_event_tx, internal_event_rx) = async_channel::unbounded::<EventMessage>();
 
-        let router = Arc::new(ToolRouter::new(Arc::new(registry)));
+        let registry = Arc::new(registry);
+        let router = Arc::new(ToolRouter::new(registry.clone()));
         let executor = Arc::new(Executor::new(config.clone(), router, internal_event_tx));
 
         let session = Self {
@@ -41,6 +43,7 @@ impl Session {
             config,
             state,
             executor,
+            registry,
             submission_tx,
             submission_rx,
             event_tx: event_tx.clone(),
@@ -91,6 +94,17 @@ impl Session {
             current: SessionState::Initializing,
         }))
         .await?;
+
+        // Spawn the main processor loop
+        spawn_processor(
+            self.id,
+            self.config.clone(),
+            self.state.clone(),
+            self.executor.clone(),
+            self.submission_rx.clone(),
+            self.event_tx.clone(),
+            &self.registry,
+        )?;
 
         self.state.transition(SessionState::Ready)?;
 
