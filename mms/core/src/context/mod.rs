@@ -8,11 +8,11 @@
 //! - History normalization
 
 mod history;
-mod item;
+pub mod item;
 pub mod token;
 mod truncation;
 
 pub use history::ContextManager;
-pub use item::{ResponseItem, FunctionCallItem, FunctionOutputItem, ReasoningItem};
+pub use item::{ResponseItem, FunctionCallItem, FunctionOutputItem, ReasoningItem, SystemItem, MessageItem, MessageRole};
 pub use token::{TokenUsageInfo, RateLimitSnapshot, estimate_tokens, approx_tokens_from_bytes};
 pub use truncation::{TruncationPolicy, TruncationResult, ModelLimits};

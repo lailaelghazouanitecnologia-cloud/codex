@@ -1,9 +1,11 @@
 //! Main agent processing loop - the heart of the agentic system.
 //!
 //! This module consumes submissions from the session and orchestrates:
-//! - LLM calls with streaming
-//! - Tool call execution
+//! - LLM calls with streaming and retry logic
+//! - Tool call execution (sequential or parallel)
+//! - Approval flow for sensitive operations
 //! - Agentic loop (tool results fed back to LLM)
+//! - Cancellation and interrupt handling
 //! - Event emission
 
 use async_channel::{Receiver, Sender};
@@ -16,20 +18,35 @@ use mms_common::{AgentError, AgentResult, EventId};
 use mms_config::Config;
 use mms_exec::{Executor, Turn, TurnId, TurnState};
 use mms_protocol::{
-    AgentMessageDeltaEvent, AgentMessageEvent, AgentThinkingEvent, ErrorEvent, Event,
-    EventMessage, Operation, SessionId, Submission, WarningEvent,
+    AgentMessageDeltaEvent, AgentMessageEvent, AgentThinkingEvent, ApprovalMode,
+    ApprovalRequiredEvent, ErrorEvent, Event, EventMessage, Operation, RiskLevel,
+    SessionId, Submission, WarningEvent,
 };
 use mms_providers::{
     clients::create_client, ClientConfig, CompletionRequest, CompletionResponse, FinishReason,
-    FunctionCall, Message, MessageContent, MessageRole, ModelClient, StreamEvent, ToolCall as ProviderToolCall,
-    ToolDefinition, Usage,
+    FunctionCall, Message, MessageContent, MessageRole, ModelClient, StreamEvent,
+    ToolCall as ProviderToolCall, ToolDefinition, Usage,
 };
 use mms_tools::{ToolCall as ExecToolCall, ToolOutput, ToolRegistry, ToolSpec};
 
+use crate::approval::{
+    approve, new_shared_manager, reject, request_command_approval, cancel_all,
+    ReviewDecision, SharedApprovalManager, DEFAULT_APPROVAL_TIMEOUT,
+};
+use crate::cancel::CancellationToken;
+use crate::context::{
+    ContextManager, FunctionCallItem, MessageItem, MessageRole as ContextMessageRole,
+    ModelLimits, ResponseItem, SystemItem, TokenUsageInfo,
+};
+use crate::parallel::{ParallelConfig, ParallelExecutor};
+use crate::retry::{RetryConfig, RetryState, RetryableError};
 use crate::state::StateManager;
 
 /// Maximum iterations of the agentic loop to prevent infinite loops
 const MAX_AGENTIC_ITERATIONS: usize = 50;
+
+/// Default maximum concurrent tool executions
+const DEFAULT_PARALLEL_TOOL_CALLS: usize = 5;
 
 /// Processor handles the main agent loop
 pub struct Processor {
@@ -41,8 +58,16 @@ pub struct Processor {
     event_tx: Sender<Event>,
     client: Box<dyn ModelClient>,
     tool_specs: Vec<ToolSpec>,
-    /// Conversation history
-    messages: Vec<Message>,
+    /// Conversation history with context management
+    context: ContextManager,
+    /// Approval manager for tool execution gating
+    approval_manager: SharedApprovalManager,
+    /// Cancellation token for the current processing
+    cancel_token: CancellationToken,
+    /// Parallel executor for tool calls
+    parallel_executor: ParallelExecutor,
+    /// Retry configuration
+    retry_config: RetryConfig,
 }
 
 impl Processor {
@@ -67,9 +92,27 @@ impl Processor {
         // Get tool specs for the LLM
         let tool_specs = registry.specs();
 
-        // Initialize with system message
+        // Initialize context manager with model limits
+        let model_limits = Self::get_model_limits(config.model.as_deref());
+        let mut context = ContextManager::with_model_limits(model_limits);
+
+        // Add system message
         let system_prompt = build_system_prompt(&config);
-        let messages = vec![Message::system(system_prompt)];
+        context.record(ResponseItem::System(SystemItem {
+            content: system_prompt,
+            is_developer: false,
+        }));
+
+        // Create approval manager
+        let approval_manager = new_shared_manager();
+
+        // Create parallel executor
+        let parallel_config = ParallelConfig::new(DEFAULT_PARALLEL_TOOL_CALLS)
+            .with_preserve_order(true);
+        let parallel_executor = ParallelExecutor::new(parallel_config);
+
+        // Create retry config
+        let retry_config = RetryConfig::default();
 
         Ok(Self {
             session_id,
@@ -80,8 +123,23 @@ impl Processor {
             event_tx,
             client,
             tool_specs,
-            messages,
+            context,
+            approval_manager,
+            cancel_token: CancellationToken::new(),
+            parallel_executor,
+            retry_config,
         })
+    }
+
+    /// Get model limits based on model name
+    fn get_model_limits(model: Option<&str>) -> ModelLimits {
+        match model {
+            Some(m) if m.starts_with("gpt-4o") => ModelLimits::gpt4o(),
+            Some(m) if m.starts_with("gpt-4") => ModelLimits::gpt4(),
+            Some(m) if m.starts_with("claude-3-5") => ModelLimits::claude35_sonnet(),
+            Some(m) if m.starts_with("claude-3") => ModelLimits::claude3(),
+            _ => ModelLimits::default(),
+        }
     }
 
     /// Run the main processing loop
@@ -116,21 +174,26 @@ impl Processor {
     async fn process_submission(&mut self, submission: Submission) -> AgentResult<()> {
         match submission.operation {
             Operation::UserMessage(msg) => {
+                // Reset cancel token for new user message
+                self.cancel_token = CancellationToken::new();
                 self.handle_user_message(msg.content).await
             }
-            Operation::Approve(approve) => {
-                // TODO: Handle approval - resume paused tool execution
-                debug!(request_id = %approve.request_id, "Approval received");
+            Operation::Approve(op) => {
+                debug!(request_id = %op.request_id, "Approval received");
+                approve(&self.approval_manager, &op.request_id).await;
                 Ok(())
             }
-            Operation::Reject(reject) => {
-                // TODO: Handle rejection
-                debug!(request_id = %reject.request_id, "Rejection received");
+            Operation::Reject(op) => {
+                debug!(request_id = %op.request_id, "Rejection received");
+                reject(&self.approval_manager, &op.request_id).await;
                 Ok(())
             }
             Operation::Interrupt => {
-                // TODO: Handle interrupt - stop current processing
                 warn!("Interrupt received");
+                // Cancel current processing
+                self.cancel_token.cancel();
+                // Cancel all pending approvals
+                cancel_all(&self.approval_manager).await;
                 Ok(())
             }
             Operation::Shutdown => {
@@ -143,8 +206,12 @@ impl Processor {
 
     /// Handle a user message - the main agentic loop
     async fn handle_user_message(&mut self, content: String) -> AgentResult<()> {
-        // Add user message to history
-        self.messages.push(Message::user(&content));
+        // Add user message to context
+        self.context.record(ResponseItem::Message(MessageItem {
+            role: ContextMessageRole::User,
+            content: content.clone(),
+            name: None,
+        }));
 
         // Create a new turn
         let turn_id = TurnId::new(self.state.next_event_id());
@@ -155,6 +222,12 @@ impl Processor {
         let mut iterations = 0;
 
         loop {
+            // Check for cancellation
+            if self.cancel_token.is_cancelled() {
+                debug!("Processing cancelled");
+                break;
+            }
+
             iterations += 1;
             if iterations > MAX_AGENTIC_ITERATIONS {
                 self.emit(EventMessage::Warning(WarningEvent {
@@ -165,24 +238,51 @@ impl Processor {
                 break;
             }
 
-            // Call the LLM
-            let response = self.call_llm(&mut turn).await?;
+            // Check if we should auto-compact
+            if self.context.should_compact() {
+                debug!("Context auto-compaction triggered");
+                // TODO: Implement context compaction
+            }
+
+            // Call the LLM with retry
+            let response = match self.call_llm_with_retry(&mut turn).await {
+                Ok(r) => r,
+                Err(e) => {
+                    if self.cancel_token.is_cancelled() {
+                        debug!("LLM call cancelled");
+                        break;
+                    }
+                    return Err(e);
+                }
+            };
 
             // Check if we have tool calls
             if let Some(tool_calls) = &response.message.tool_calls {
                 if !tool_calls.is_empty() {
-                    // Add assistant message with tool calls to history
-                    self.messages.push(response.message.clone());
+                    // Record assistant message with tool calls
+                    for tc in tool_calls {
+                        let args: serde_json::Value = serde_json::from_str(&tc.function.arguments)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        let needs_approval = self.needs_approval(&tc.function.name);
+                        self.context.record(ResponseItem::FunctionCall(FunctionCallItem {
+                            call_id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            arguments: args,
+                            requires_approval: needs_approval,
+                            approval_status: None,
+                        }));
+                    }
 
                     // Execute tools and get results
-                    let tool_results = self.execute_tool_calls(&mut turn, tool_calls).await?;
+                    let tool_results = self.execute_tool_calls_parallel(&mut turn, tool_calls).await?;
 
-                    // Add tool results to history
-                    for result in tool_results {
-                        self.messages.push(Message::tool_response(
-                            &result.call_id,
-                            &result.content,
-                        ));
+                    // Record tool results
+                    for result in &tool_results {
+                        self.context.record_output(
+                            result.call_id.clone(),
+                            result.content.clone(),
+                            !result.success,  // is_error is inverse of success
+                        );
                     }
 
                     // Continue the loop to send results back to LLM
@@ -191,10 +291,14 @@ impl Processor {
             }
 
             // No tool calls - we're done with this turn
-            // Add assistant response to history
+            // Record assistant response
             if let Some(text) = response.message.text() {
                 if !text.is_empty() {
-                    self.messages.push(response.message);
+                    self.context.record(ResponseItem::Message(MessageItem {
+                        role: ContextMessageRole::Assistant,
+                        content: text.to_string(),
+                        name: None,
+                    }));
                 }
             }
 
@@ -207,11 +311,44 @@ impl Processor {
         Ok(())
     }
 
+    /// Call the LLM with retry logic
+    async fn call_llm_with_retry(&mut self, turn: &mut Turn) -> AgentResult<CompletionResponse> {
+        let mut retry_state = RetryState::new(self.retry_config.clone());
+
+        loop {
+            match self.call_llm(turn).await {
+                Ok(response) => {
+                    retry_state.record_success();
+                    return Ok(response);
+                }
+                Err(e) => {
+                    // Determine if error is retryable
+                    let retryable = classify_error(&e);
+
+                    if let Some(delay) = retry_state.record_error(retryable) {
+                        warn!(
+                            error = %e,
+                            attempt = retry_state.attempt(),
+                            "LLM call failed, retrying"
+                        );
+
+                        // Sleep with cancellation support
+                        tokio::select! {
+                            _ = self.cancel_token.cancelled() => {
+                                return Err(AgentError::Cancelled);
+                            }
+                            _ = tokio::time::sleep(delay) => {}
+                        }
+                    } else {
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    }
+
     /// Call the LLM with streaming
-    async fn call_llm(
-        &mut self,
-        turn: &mut Turn,
-    ) -> AgentResult<CompletionResponse> {
+    async fn call_llm(&mut self, turn: &mut Turn) -> AgentResult<CompletionResponse> {
         // Build tool definitions for the LLM
         let tools: Vec<ToolDefinition> = self
             .tool_specs
@@ -238,7 +375,9 @@ impl Processor {
             .with_tools(tools)
             .with_stream(true);
 
-        let request = CompletionRequest::new(self.messages.clone(), client_config);
+        // Get messages from context
+        let messages = self.build_messages_for_request();
+        let request = CompletionRequest::new(messages, client_config);
 
         // Use streaming
         let mut stream = self
@@ -255,54 +394,70 @@ impl Processor {
         let mut response_id = String::new();
         let mut response_model = String::new();
 
-        // Process stream events
-        while let Some(event_result) = stream.next().await {
-            let event = event_result
-                .map_err(|e| AgentError::provider(format!("Stream error: {}", e.message)))?;
+        // Process stream events with cancellation support
+        loop {
+            tokio::select! {
+                biased;
 
-            match event {
-                StreamEvent::Start(start) => {
-                    response_id = start.id;
-                    response_model = start.model;
+                _ = self.cancel_token.cancelled() => {
+                    debug!("Stream cancelled");
+                    return Err(AgentError::Cancelled);
                 }
-                StreamEvent::Delta(delta) => {
-                    if let Some(text) = delta.content {
-                        content.push_str(&text);
-                        // Emit delta event
-                        self.emit(EventMessage::AgentMessageDelta(AgentMessageDeltaEvent {
-                            delta: text,
-                        }))
-                        .await?;
+
+                event_opt = stream.next() => {
+                    match event_opt {
+                        Some(Ok(event)) => {
+                            match event {
+                                StreamEvent::Start(start) => {
+                                    response_id = start.id;
+                                    response_model = start.model;
+                                }
+                                StreamEvent::Delta(delta) => {
+                                    if let Some(text) = delta.content {
+                                        content.push_str(&text);
+                                        // Emit delta event
+                                        self.emit(EventMessage::AgentMessageDelta(AgentMessageDeltaEvent {
+                                            delta: text,
+                                        }))
+                                        .await?;
+                                    }
+                                    if let Some(reasoning) = delta.reasoning {
+                                        // Emit thinking event
+                                        self.emit(EventMessage::AgentThinking(AgentThinkingEvent {
+                                            content: reasoning,
+                                        }))
+                                        .await?;
+                                    }
+                                }
+                                StreamEvent::ToolCallStart(tc_start) => {
+                                    tool_calls.insert(
+                                        tc_start.index,
+                                        ToolCallAccumulator {
+                                            id: tc_start.id,
+                                            name: tc_start.name,
+                                            arguments: String::new(),
+                                        },
+                                    );
+                                }
+                                StreamEvent::ToolCallDelta(tc_delta) => {
+                                    if let Some(acc) = tool_calls.get_mut(&tc_delta.index) {
+                                        acc.arguments.push_str(&tc_delta.arguments_delta);
+                                    }
+                                }
+                                StreamEvent::ToolCallEnd(_) => {
+                                    // Tool call complete - nothing to do here
+                                }
+                                StreamEvent::End(end) => {
+                                    finish_reason = end.finish_reason;
+                                    usage = end.usage;
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            return Err(AgentError::provider(format!("Stream error: {}", e.message)));
+                        }
+                        None => break,
                     }
-                    if let Some(reasoning) = delta.reasoning {
-                        // Emit thinking event
-                        self.emit(EventMessage::AgentThinking(AgentThinkingEvent {
-                            content: reasoning,
-                        }))
-                        .await?;
-                    }
-                }
-                StreamEvent::ToolCallStart(tc_start) => {
-                    tool_calls.insert(
-                        tc_start.index,
-                        ToolCallAccumulator {
-                            id: tc_start.id,
-                            name: tc_start.name,
-                            arguments: String::new(),
-                        },
-                    );
-                }
-                StreamEvent::ToolCallDelta(tc_delta) => {
-                    if let Some(acc) = tool_calls.get_mut(&tc_delta.index) {
-                        acc.arguments.push_str(&tc_delta.arguments_delta);
-                    }
-                }
-                StreamEvent::ToolCallEnd(_) => {
-                    // Tool call complete - nothing to do here
-                }
-                StreamEvent::End(end) => {
-                    finish_reason = end.finish_reason;
-                    usage = end.usage;
                 }
             }
         }
@@ -311,6 +466,12 @@ impl Processor {
         if let Some(u) = &usage {
             turn.add_input_tokens(u.input_tokens);
             turn.add_output_tokens(u.output_tokens);
+
+            // Update context token tracking
+            self.context.update_token_usage(&TokenUsageInfo::new(
+                u.input_tokens,
+                u.output_tokens,
+            ));
         }
 
         // Emit full message if there's content
@@ -358,15 +519,138 @@ impl Processor {
         })
     }
 
-    /// Execute tool calls and return results
-    async fn execute_tool_calls(
+    /// Build messages for LLM request from context
+    fn build_messages_for_request(&self) -> Vec<Message> {
+        let history = self.context.get_history_for_prompt();
+        let mut messages = Vec::with_capacity(history.len());
+
+        for item in history {
+            match item {
+                ResponseItem::System(s) => {
+                    messages.push(Message::system(&s.content));
+                }
+                ResponseItem::Message(m) => {
+                    match m.role {
+                        ContextMessageRole::User => {
+                            messages.push(Message::user(&m.content));
+                        }
+                        ContextMessageRole::Assistant => {
+                            messages.push(Message::assistant(&m.content));
+                        }
+                        ContextMessageRole::System => {
+                            messages.push(Message::system(&m.content));
+                        }
+                        ContextMessageRole::Tool => {
+                            // Tool messages are handled via FunctionOutput
+                        }
+                    }
+                }
+                ResponseItem::FunctionCall(f) => {
+                    // Create assistant message with tool call
+                    let tc = ProviderToolCall {
+                        id: f.call_id,
+                        r#type: "function".into(),
+                        function: FunctionCall {
+                            name: f.name,
+                            arguments: f.arguments.to_string(),
+                        },
+                    };
+                    let mut msg = Message::assistant("");
+                    msg.tool_calls = Some(vec![tc]);
+                    messages.push(msg);
+                }
+                ResponseItem::FunctionOutput(o) => {
+                    messages.push(Message::tool_response(&o.call_id, &o.content));
+                }
+                _ => {
+                    // Skip other item types (Reasoning, Compaction, GhostSnapshot)
+                }
+            }
+        }
+
+        messages
+    }
+
+    /// Execute tool calls in parallel with approval flow
+    async fn execute_tool_calls_parallel(
         &self,
         turn: &mut Turn,
         tool_calls: &[ProviderToolCall],
     ) -> AgentResult<Vec<ToolOutput>> {
+        // For now, execute sequentially with approval
+        // TODO: Implement true parallel execution with approval
         let mut outputs = Vec::with_capacity(tool_calls.len());
 
         for tc in tool_calls {
+            // Check cancellation
+            if self.cancel_token.is_cancelled() {
+                debug!("Tool execution cancelled");
+                break;
+            }
+
+            // Check if approval is required
+            let needs_approval = self.needs_approval(&tc.function.name);
+
+            if needs_approval {
+                // Request approval
+                let request_id = format!("{}_{}", self.session_id, tc.id);
+
+                // Emit approval request event
+                self.emit(EventMessage::ApprovalRequired(ApprovalRequiredEvent {
+                    request_id: request_id.clone(),
+                    tool_name: tc.function.name.clone(),
+                    description: format!("Execute {} with args: {}", tc.function.name, tc.function.arguments),
+                    risk_level: RiskLevel::Medium,
+                }))
+                .await?;
+
+                // Wait for approval
+                let decision = request_command_approval(
+                    &self.approval_manager,
+                    request_id.clone(),
+                    tc.function.name.clone(),
+                    vec![tc.function.arguments.clone()],
+                    std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    DEFAULT_APPROVAL_TIMEOUT,
+                )
+                .await;
+
+                match decision {
+                    ReviewDecision::Approved => {
+                        debug!(tool = %tc.function.name, "Tool approved");
+                    }
+                    ReviewDecision::Rejected => {
+                        debug!(tool = %tc.function.name, "Tool rejected");
+                        outputs.push(ToolOutput::error(
+                            &tc.id,
+                            "Tool execution rejected by user",
+                            0,
+                        ));
+                        continue;
+                    }
+                    ReviewDecision::TimedOut => {
+                        debug!(tool = %tc.function.name, "Approval timed out");
+                        outputs.push(ToolOutput::error(
+                            &tc.id,
+                            "Approval request timed out",
+                            0,
+                        ));
+                        continue;
+                    }
+                    ReviewDecision::Cancelled => {
+                        debug!(tool = %tc.function.name, "Approval cancelled");
+                        outputs.push(ToolOutput::error(
+                            &tc.id,
+                            "Tool execution cancelled",
+                            0,
+                        ));
+                        continue;
+                    }
+                }
+            }
+
             // Parse arguments
             let arguments: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or_else(|_| serde_json::json!({}));
@@ -374,13 +658,28 @@ impl Processor {
             // Create the tool call for the executor
             let exec_call = ExecToolCall::new(&tc.id, &tc.function.name, arguments);
 
-            // Execute via executor (handles events and approval)
+            // Execute via executor
             let result = self.executor.execute_tool_calls(turn, vec![exec_call]).await?;
 
             outputs.extend(result);
         }
 
         Ok(outputs)
+    }
+
+    /// Check if a tool requires approval
+    fn needs_approval(&self, tool_name: &str) -> bool {
+        // Get approval mode from config (defaults to OnDanger)
+        let approval_mode = self.config.approval_mode;
+
+        match approval_mode {
+            ApprovalMode::Never => false,
+            ApprovalMode::Always => true,
+            ApprovalMode::OnDanger => {
+                // OnDanger mode: require approval for shell/write operations
+                matches!(tool_name, "shell" | "write" | "bash" | "execute")
+            }
+        }
     }
 
     /// Emit an event
@@ -400,6 +699,25 @@ struct ToolCallAccumulator {
     id: String,
     name: String,
     arguments: String,
+}
+
+/// Classify an error for retry purposes
+fn classify_error(error: &AgentError) -> RetryableError {
+    let msg = error.to_string().to_lowercase();
+
+    if msg.contains("timeout") {
+        RetryableError::Timeout
+    } else if msg.contains("rate limit") || msg.contains("429") {
+        RetryableError::RateLimited(None)
+    } else if msg.contains("connection") || msg.contains("network") {
+        RetryableError::ConnectionFailed
+    } else if msg.contains("500") || msg.contains("502") || msg.contains("503") {
+        RetryableError::ServerError(500)
+    } else if msg.contains("stream") && msg.contains("interrupt") {
+        RetryableError::StreamInterrupted
+    } else {
+        RetryableError::NonRetryable
+    }
 }
 
 /// Build the system prompt
