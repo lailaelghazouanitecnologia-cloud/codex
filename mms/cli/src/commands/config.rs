@@ -30,5 +30,39 @@ pub async fn show_config() -> Result<()> {
         }
     }
 
+    // Sandbox configuration
+    println!();
+    println!("Sandbox Configuration:");
+    println!("  Enabled: {}", config.sandbox.enabled);
+    println!("  Network: {:?}", config.sandbox.network);
+    println!("  Disk Read: {:?}", config.sandbox.disk_read);
+    println!("  Disk Write: {:?}", config.sandbox.disk_write);
+
+    if !config.sandbox.writable_paths.is_empty() {
+        println!("  Writable Paths:");
+        for path in &config.sandbox.writable_paths {
+            println!("    - {}", path.display());
+        }
+    }
+
+    if !config.sandbox.readable_paths.is_empty() {
+        println!("  Readable Paths:");
+        for path in &config.sandbox.readable_paths {
+            println!("    - {}", path.display());
+        }
+    }
+
+    if let Some(policy_file) = &config.sandbox.exec_policy_file {
+        println!("  Exec Policy File: {}", policy_file.display());
+    }
+
+    // Tools configuration
+    println!();
+    println!("Tools Configuration:");
+    println!("  Shell: {}", if config.tools.shell_enabled { "enabled" } else { "disabled" });
+    println!("  File Read: {}", if config.tools.file_read_enabled { "enabled" } else { "disabled" });
+    println!("  File Write: {}", if config.tools.file_write_enabled { "enabled" } else { "disabled" });
+    println!("  Web Search: {}", if config.tools.web_search_enabled { "enabled" } else { "disabled" });
+
     Ok(())
 }
