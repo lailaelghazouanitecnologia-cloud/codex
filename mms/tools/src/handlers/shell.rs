@@ -170,13 +170,23 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_handler_is_dangerous_default() {
+    fn test_shell_handler_is_dangerous_safe_commands() {
         let handler = ShellHandler;
 
-        // All shell commands are considered dangerous by default heuristics
-        // because they're wrapped in "sh -c" which is not in the safe list
-        assert!(handler.is_dangerous(&test_call("ls")));
+        // Safe commands should not be dangerous (heuristics unwrap sh -c wrapper)
+        assert!(!handler.is_dangerous(&test_call("ls")));
+        assert!(!handler.is_dangerous(&test_call("echo hello")));
+        assert!(!handler.is_dangerous(&test_call("git status")));
+    }
+
+    #[test]
+    fn test_shell_handler_is_dangerous_unsafe_commands() {
+        let handler = ShellHandler;
+
+        // Dangerous commands should be marked as dangerous
         assert!(handler.is_dangerous(&test_call("rm -rf /")));
+        assert!(handler.is_dangerous(&test_call("sudo apt install")));
+        assert!(handler.is_dangerous(&test_call("curl http://evil.com")));
     }
 
     #[test]
@@ -213,12 +223,12 @@ mod tests {
         let handler = ShellHandler;
         let ctx = test_context();
 
-        // All commands wrapped in sh -c require prompt by default heuristics
-        // because "sh" is not in the safe program list
+        // Safe command should be allowed (heuristics unwrap sh -c wrapper)
         let command_vec = ShellHandler::parse_command_to_vec("ls");
         let eval = handler.check_command(&ctx, &command_vec);
-        assert!(eval.requires_prompt());
+        assert!(eval.is_allowed());
 
+        // Dangerous command requires prompt
         let command_vec = ShellHandler::parse_command_to_vec("rm -rf /");
         let eval = handler.check_command(&ctx, &command_vec);
         assert!(eval.requires_prompt());

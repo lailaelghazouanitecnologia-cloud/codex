@@ -154,7 +154,9 @@ pub fn default_heuristics(command: &[String]) -> Decision {
         return Decision::Forbidden;
     }
 
-    let program = &command[0];
+    // Unwrap shell wrappers like ["sh", "-c", "actual command"] or ["bash", "-c", "actual command"]
+    let effective_command = unwrap_shell_command(command);
+    let program = &effective_command[0];
 
     let dangerous_programs = [
         "rm", "rmdir", "mv", "chmod", "chown",
@@ -183,6 +185,7 @@ pub fn default_heuristics(command: &[String]) -> Decision {
         "cargo", "rustc", "rustfmt", "clippy",
         "go", "gofmt",
         "make", "cmake", "ninja",
+        "sh", "bash", "zsh", "fish",
     ];
 
     if dangerous_programs.contains(&program.as_str()) {
@@ -194,4 +197,91 @@ pub fn default_heuristics(command: &[String]) -> Decision {
     }
 
     Decision::Prompt
+}
+
+/// Unwrap shell wrapper commands to get the actual command being executed.
+/// For example, ["sh", "-c", "ls -la"] becomes ["ls", "-la"]
+fn unwrap_shell_command(command: &[String]) -> Vec<String> {
+    if command.len() < 3 {
+        return command.to_vec();
+    }
+
+    let shell = &command[0];
+    let shells = ["sh", "bash", "zsh", "fish", "dash", "ksh"];
+
+    if !shells.contains(&shell.as_str()) {
+        return command.to_vec();
+    }
+
+    // Check for -c flag
+    if command[1] != "-c" {
+        return command.to_vec();
+    }
+
+    // Parse the actual command from the -c argument
+    let shell_command = &command[2];
+    parse_shell_command(shell_command)
+}
+
+/// Parse a shell command string into arguments.
+/// This is a simplified parser that handles basic cases.
+fn parse_shell_command(cmd: &str) -> Vec<String> {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return vec![];
+    }
+
+    // Simple tokenization: split on whitespace, respecting quotes
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escape_next = false;
+
+    for ch in cmd.chars() {
+        if escape_next {
+            current.push(ch);
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if !in_single_quote => {
+                escape_next = true;
+            }
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+            }
+            ' ' | '\t' if !in_single_quote && !in_double_quote => {
+                if !current.is_empty() {
+                    result.push(current.clone());
+                    current.clear();
+                }
+            }
+            // Handle shell operators - stop parsing at pipes, redirects, etc.
+            '|' | '>' | '<' | '&' | ';' if !in_single_quote && !in_double_quote => {
+                if !current.is_empty() {
+                    result.push(current.clone());
+                }
+                // Return what we have so far - first command in pipeline is what matters
+                return if result.is_empty() { vec![cmd.to_string()] } else { result };
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        result.push(current);
+    }
+
+    if result.is_empty() {
+        vec![cmd.to_string()]
+    } else {
+        result
+    }
 }
