@@ -1,6 +1,7 @@
 mod commands;
 
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -24,6 +25,11 @@ enum Commands {
     Mcp {
         #[command(subcommand)]
         action: McpAction,
+    },
+    #[command(about = "Manage execution policies")]
+    Policy {
+        #[command(subcommand)]
+        action: PolicyAction,
     },
     #[command(about = "Show configuration")]
     Config,
@@ -55,6 +61,24 @@ enum McpAction {
     },
 }
 
+#[derive(Subcommand)]
+enum PolicyAction {
+    #[command(about = "Validate a policy file")]
+    Validate {
+        #[arg(help = "Path to policy file")]
+        path: PathBuf,
+    },
+    #[command(about = "Test a command against a policy")]
+    Test {
+        #[arg(help = "Command to test")]
+        command: String,
+        #[arg(short, long, help = "Path to policy file (uses heuristics if not provided)")]
+        policy: Option<PathBuf>,
+    },
+    #[command(about = "Show policy information and defaults")]
+    Info,
+}
+
 fn init_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -77,6 +101,11 @@ async fn main() -> anyhow::Result<()> {
             McpAction::List => commands::mcp_list().await,
             McpAction::Add { name, command } => commands::mcp_add(&name, &command).await,
             McpAction::Remove { name } => commands::mcp_remove(&name).await,
+        },
+        Commands::Policy { action } => match action {
+            PolicyAction::Validate { path } => commands::policy_validate(path).await,
+            PolicyAction::Test { command, policy } => commands::policy_test(policy, command).await,
+            PolicyAction::Info => commands::policy_info().await,
         },
         Commands::Config => commands::show_config().await,
     }

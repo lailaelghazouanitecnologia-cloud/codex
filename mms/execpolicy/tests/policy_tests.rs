@@ -1,6 +1,6 @@
 use mms_execpolicy::{
     CommandPattern, Decision, ExactRule, GlobRule, Policy, PrefixRule, PatternToken, Rule,
-    default_heuristics,
+    default_heuristics, parse_policy,
 };
 
 fn cmd(parts: &[&str]) -> Vec<String> {
@@ -170,4 +170,113 @@ fn test_heuristics_direct_shell_is_safe() {
     assert_eq!(default_heuristics(&cmd(&["sh"])), Decision::Allow);
     assert_eq!(default_heuristics(&cmd(&["bash"])), Decision::Allow);
     assert_eq!(default_heuristics(&cmd(&["zsh"])), Decision::Allow);
+}
+
+// Loader tests
+
+#[test]
+fn test_parse_policy_basic() {
+    let content = r#"
+[policy]
+default = "allow"
+
+[[rules]]
+type = "prefix"
+command = ["git", "status"]
+decision = "allow"
+"#;
+    let policy = parse_policy(content).unwrap();
+    let eval = policy.check(&cmd(&["git", "status"]));
+    assert!(eval.is_allowed());
+}
+
+#[test]
+fn test_parse_policy_with_forbidden() {
+    let content = r#"
+[policy]
+default = "prompt"
+
+[[rules]]
+type = "prefix"
+command = ["rm", "-rf"]
+decision = "forbidden"
+"#;
+    let policy = parse_policy(content).unwrap();
+    let eval = policy.check(&cmd(&["rm", "-rf", "/"]));
+    assert!(eval.is_forbidden());
+}
+
+#[test]
+fn test_parse_policy_exact_rule() {
+    let content = r#"
+[[rules]]
+type = "exact"
+command = ["echo", "hello"]
+decision = "allow"
+"#;
+    let policy = parse_policy(content).unwrap();
+    let eval = policy.check(&cmd(&["echo", "hello"]));
+    assert!(eval.is_allowed());
+
+    let eval = policy.check(&cmd(&["echo", "world"]));
+    assert!(eval.requires_prompt()); // default
+}
+
+#[test]
+fn test_parse_policy_glob_rule() {
+    let content = r#"
+[[rules]]
+type = "glob"
+program = "npm"
+decision = "allow"
+"#;
+    let policy = parse_policy(content).unwrap();
+    let eval = policy.check(&cmd(&["npm", "install"]));
+    assert!(eval.is_allowed());
+
+    let eval = policy.check(&cmd(&["yarn"]));
+    assert!(eval.requires_prompt());
+}
+
+#[test]
+fn test_parse_policy_mixed_rules() {
+    let content = r#"
+[policy]
+default = "forbidden"
+
+[[rules]]
+type = "prefix"
+command = ["git"]
+decision = "allow"
+
+[[rules]]
+type = "exact"
+command = ["cargo", "build"]
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "ls"
+decision = "allow"
+"#;
+    let policy = parse_policy(content).unwrap();
+
+    assert!(policy.check(&cmd(&["git", "status"])).is_allowed());
+    assert!(policy.check(&cmd(&["cargo", "build"])).is_allowed());
+    assert!(policy.check(&cmd(&["ls", "-la"])).is_allowed());
+    assert!(policy.check(&cmd(&["rm"])).is_forbidden()); // default
+}
+
+#[test]
+fn test_parse_policy_empty() {
+    let content = "";
+    let policy = parse_policy(content).unwrap();
+    let eval = policy.check(&cmd(&["anything"]));
+    assert!(eval.requires_prompt()); // default
+}
+
+#[test]
+fn test_parse_policy_invalid_toml() {
+    let content = "invalid toml [[[";
+    assert!(parse_policy(content).is_err());
 }

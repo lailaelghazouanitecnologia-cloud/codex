@@ -16,6 +16,9 @@ pub enum PolicyError {
 
     #[error("Example did not match: {0}")]
     ExampleNotMatched(String),
+
+    #[error("IO error: {0}")]
+    IoError(String),
 }
 
 pub type PolicyResult<T> = Result<T, PolicyError>;

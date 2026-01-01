@@ -1,4 +1,5 @@
 use mms_common::AgentResult;
+use mms_linux_sandbox::{DiskAccess, NetworkAccess, SandboxPolicy};
 use mms_protocol::{ApprovalMode, SessionConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -18,6 +19,8 @@ pub struct Config {
     pub timeout_ms: u64,
     pub features: Features,
     pub tools: ToolsConfig,
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
 }
 
 impl Config {
@@ -80,6 +83,7 @@ impl Default for Config {
             timeout_ms: mms_common::DEFAULT_TIMEOUT_MS,
             features: Features::default(),
             tools: ToolsConfig::default(),
+            sandbox: SandboxConfig::default(),
         }
     }
 }
@@ -101,6 +105,141 @@ impl Default for ToolsConfig {
             file_write_enabled: true,
             web_search_enabled: false,
             max_output_bytes: mms_common::MAX_TOOL_OUTPUT_BYTES,
+        }
+    }
+}
+
+/// Sandbox configuration for command execution security
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    /// Enable sandboxing (Linux Landlock/seccomp)
+    pub enabled: bool,
+    /// Network access policy
+    pub network: NetworkAccessConfig,
+    /// Disk read access policy
+    pub disk_read: DiskAccessConfig,
+    /// Disk write access policy
+    pub disk_write: DiskAccessConfig,
+    /// Additional writable paths
+    #[serde(default)]
+    pub writable_paths: Vec<PathBuf>,
+    /// Additional readable paths
+    #[serde(default)]
+    pub readable_paths: Vec<PathBuf>,
+    /// Path to exec policy file (TOML)
+    pub exec_policy_file: Option<PathBuf>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            network: NetworkAccessConfig::None,
+            disk_read: DiskAccessConfig::Full,
+            disk_write: DiskAccessConfig::Restricted,
+            writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
+            exec_policy_file: None,
+        }
+    }
+}
+
+impl SandboxConfig {
+    /// Convert to a SandboxPolicy
+    pub fn to_sandbox_policy(&self, cwd: &PathBuf) -> SandboxPolicy {
+        let mut policy = SandboxPolicy::default()
+            .with_network(self.network.into())
+            .with_disk_read(self.disk_read.into())
+            .with_disk_write(self.disk_write.into());
+
+        // Add cwd as writable by default
+        policy = policy.add_writable_root(cwd);
+
+        // Add configured writable paths
+        for path in &self.writable_paths {
+            policy = policy.add_writable_root(path);
+        }
+
+        // Add configured readable paths
+        for path in &self.readable_paths {
+            policy = policy.add_readable_root(path);
+        }
+
+        policy
+    }
+
+    /// Create a permissive sandbox config (for testing)
+    pub fn permissive() -> Self {
+        Self {
+            enabled: false,
+            network: NetworkAccessConfig::Full,
+            disk_read: DiskAccessConfig::Full,
+            disk_write: DiskAccessConfig::Full,
+            writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
+            exec_policy_file: None,
+        }
+    }
+
+    /// Create a restrictive sandbox config
+    pub fn restrictive() -> Self {
+        Self {
+            enabled: true,
+            network: NetworkAccessConfig::None,
+            disk_read: DiskAccessConfig::Restricted,
+            disk_write: DiskAccessConfig::Restricted,
+            writable_paths: Vec::new(),
+            readable_paths: Vec::new(),
+            exec_policy_file: None,
+        }
+    }
+}
+
+/// Network access configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkAccessConfig {
+    /// No network access
+    #[default]
+    None,
+    /// Unix sockets only (IPC)
+    UnixOnly,
+    /// Full network access
+    Full,
+}
+
+impl From<NetworkAccessConfig> for NetworkAccess {
+    fn from(config: NetworkAccessConfig) -> Self {
+        match config {
+            NetworkAccessConfig::None => NetworkAccess::None,
+            NetworkAccessConfig::UnixOnly => NetworkAccess::UnixOnly,
+            NetworkAccessConfig::Full => NetworkAccess::Full,
+        }
+    }
+}
+
+/// Disk access configuration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DiskAccessConfig {
+    /// No disk access
+    None,
+    /// Read-only access
+    ReadOnly,
+    /// Restricted access (configured paths only)
+    #[default]
+    Restricted,
+    /// Full disk access
+    Full,
+}
+
+impl From<DiskAccessConfig> for DiskAccess {
+    fn from(config: DiskAccessConfig) -> Self {
+        match config {
+            DiskAccessConfig::None => DiskAccess::None,
+            DiskAccessConfig::ReadOnly => DiskAccess::ReadOnly,
+            DiskAccessConfig::Restricted => DiskAccess::Restricted,
+            DiskAccessConfig::Full => DiskAccess::Full,
         }
     }
 }

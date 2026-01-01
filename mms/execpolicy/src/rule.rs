@@ -122,6 +122,14 @@ impl ExactRule {
     pub fn allow(command: Vec<String>) -> Self {
         Self::new(command, Decision::Allow)
     }
+
+    pub fn prompt(command: Vec<String>) -> Self {
+        Self::new(command, Decision::Prompt)
+    }
+
+    pub fn forbid(command: Vec<String>) -> Self {
+        Self::new(command, Decision::Forbidden)
+    }
 }
 
 impl Rule for ExactRule {
@@ -158,6 +166,10 @@ impl GlobRule {
 
     pub fn allow_all(program: impl Into<String>) -> Self {
         Self::new(program, Decision::Allow)
+    }
+
+    pub fn prompt_all(program: impl Into<String>) -> Self {
+        Self::new(program, Decision::Prompt)
     }
 
     pub fn forbid_all(program: impl Into<String>) -> Self {

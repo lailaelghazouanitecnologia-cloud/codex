@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 mms-common.workspace = true
+mms-execpolicy.workspace = true
+mms-linux-sandbox.workspace = true
 mms-protocol.workspace = true
 serde.workspace = true
 serde_json.workspace = true
