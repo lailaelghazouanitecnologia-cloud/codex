@@ -1,0 +1,328 @@
+# MMS Execution Policy Example
+#
+# This file defines which commands are allowed, require prompt, or are forbidden.
+#
+# Decision types:
+# - allow: Execute without asking
+# - prompt: Ask user for approval before executing
+# - forbidden: Never execute
+
+[policy]
+# Default decision for commands that don't match any rule
+# Options: allow, prompt, forbidden
+default = "prompt"
+
+# Optional metadata
+name = "Default Development Policy"
+description = "Safe defaults for development environments"
+
+# Rule Types:
+# - prefix: Match command prefix (e.g., "git status" matches "git status -s")
+# - exact: Match exact command (e.g., "echo hello" only matches "echo hello")
+# - glob: Match any command starting with program name
+
+# =============================================================================
+# ALLOWED COMMANDS
+# =============================================================================
+
+# File listing and viewing
+[[rules]]
+type = "glob"
+program = "ls"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "cat"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "head"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "tail"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "less"
+decision = "allow"
+
+# Search tools
+[[rules]]
+type = "glob"
+program = "grep"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "rg"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "find"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "fd"
+decision = "allow"
+
+# Text processing
+[[rules]]
+type = "glob"
+program = "wc"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "sort"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "uniq"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "cut"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "tr"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "sed"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "awk"
+decision = "allow"
+
+# Version control (read operations)
+[[rules]]
+type = "prefix"
+command = ["git", "status"]
+decision = "allow"
+
+[[rules]]
+type = "prefix"
+command = ["git", "log"]
+decision = "allow"
+
+[[rules]]
+type = "prefix"
+command = ["git", "diff"]
+decision = "allow"
+
+[[rules]]
+type = "prefix"
+command = ["git", "show"]
+decision = "allow"
+
+[[rules]]
+type = "prefix"
+command = ["git", "branch"]
+decision = "allow"
+
+# Version control (write operations - require prompt)
+[[rules]]
+type = "prefix"
+command = ["git", "commit"]
+decision = "prompt"
+
+[[rules]]
+type = "prefix"
+command = ["git", "push"]
+decision = "prompt"
+
+[[rules]]
+type = "prefix"
+command = ["git", "checkout"]
+decision = "prompt"
+
+[[rules]]
+type = "prefix"
+command = ["git", "reset"]
+decision = "prompt"
+
+# Build tools
+[[rules]]
+type = "glob"
+program = "cargo"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "make"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "npm"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "yarn"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "pnpm"
+decision = "allow"
+
+# Programming languages (interpreters)
+[[rules]]
+type = "glob"
+program = "node"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "python"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "python3"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "ruby"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "go"
+decision = "allow"
+
+# Utility commands
+[[rules]]
+type = "glob"
+program = "echo"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "pwd"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "date"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "whoami"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "env"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "which"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "file"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "stat"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "du"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "df"
+decision = "allow"
+
+# JSON/YAML processing
+[[rules]]
+type = "glob"
+program = "jq"
+decision = "allow"
+
+[[rules]]
+type = "glob"
+program = "yq"
+decision = "allow"
+
+# =============================================================================
+# FORBIDDEN COMMANDS
+# =============================================================================
+
+# Destructive file operations
+[[rules]]
+type = "prefix"
+command = ["rm", "-rf", "/"]
+decision = "forbidden"
+description = "Never allow rm -rf /"
+
+[[rules]]
+type = "prefix"
+command = ["rm", "-rf", "/*"]
+decision = "forbidden"
+
+# System commands
+[[rules]]
+type = "glob"
+program = "reboot"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "shutdown"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "halt"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "poweroff"
+decision = "forbidden"
+
+# Disk formatting
+[[rules]]
+type = "glob"
+program = "mkfs"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "fdisk"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "parted"
+decision = "forbidden"
+
+[[rules]]
+type = "glob"
+program = "dd"
+decision = "forbidden"

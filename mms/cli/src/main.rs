@@ -21,6 +21,21 @@ enum Commands {
         #[command(subcommand)]
         mode: RunMode,
     },
+    #[command(about = "Execute a shell command with sandbox")]
+    Shell {
+        #[arg(help = "Command to execute")]
+        command: String,
+        #[arg(short, long, help = "Path to exec policy file")]
+        policy: Option<PathBuf>,
+        #[arg(long, help = "Disable sandbox (run without restrictions)")]
+        no_sandbox: bool,
+        #[arg(long, help = "Allow network access")]
+        allow_network: bool,
+        #[arg(long, help = "Allow full disk write access")]
+        allow_write: bool,
+        #[arg(short, long, help = "Timeout in milliseconds", default_value = "30000")]
+        timeout: u64,
+    },
     #[command(about = "Manage MCP servers")]
     Mcp {
         #[command(subcommand)]
@@ -97,6 +112,24 @@ async fn main() -> anyhow::Result<()> {
             RunMode::Cli => commands::run_cli().await,
             RunMode::Web => commands::run_web().await,
         },
+        Commands::Shell {
+            command,
+            policy,
+            no_sandbox,
+            allow_network,
+            allow_write,
+            timeout,
+        } => {
+            commands::shell_exec(
+                command,
+                policy,
+                no_sandbox,
+                allow_network,
+                allow_write,
+                timeout,
+            )
+            .await
+        }
         Commands::Mcp { action } => match action {
             McpAction::List => commands::mcp_list().await,
             McpAction::Add { name, command } => commands::mcp_add(&name, &command).await,

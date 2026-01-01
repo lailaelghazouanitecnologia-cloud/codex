@@ -11,7 +11,9 @@ path = "src/main.rs"
 [dependencies]
 mms-common.workspace = true
 mms-config.workspace = true
+mms-exec.workspace = true
 mms-execpolicy.workspace = true
+mms-linux-sandbox.workspace = true
 mms-protocol.workspace = true
 mms-core.workspace = true
 mms-mcp-types.workspace = true
