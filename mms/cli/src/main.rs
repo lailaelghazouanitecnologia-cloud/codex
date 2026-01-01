@@ -36,6 +36,11 @@ enum Commands {
         #[arg(short, long, help = "Timeout in milliseconds", default_value = "30000")]
         timeout: u64,
     },
+    #[command(about = "Manage sandbox settings")]
+    Sandbox {
+        #[command(subcommand)]
+        action: SandboxAction,
+    },
     #[command(about = "Manage MCP servers")]
     Mcp {
         #[command(subcommand)]
@@ -94,6 +99,14 @@ enum PolicyAction {
     Info,
 }
 
+#[derive(Subcommand)]
+enum SandboxAction {
+    #[command(about = "Show sandbox status and system support")]
+    Status,
+    #[command(about = "Test sandbox with a simple command")]
+    Test,
+}
+
 fn init_logging() {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
@@ -130,6 +143,10 @@ async fn main() -> anyhow::Result<()> {
             )
             .await
         }
+        Commands::Sandbox { action } => match action {
+            SandboxAction::Status => commands::sandbox_status().await,
+            SandboxAction::Test => commands::sandbox_test().await,
+        },
         Commands::Mcp { action } => match action {
             McpAction::List => commands::mcp_list().await,
             McpAction::Add { name, command } => commands::mcp_add(&name, &command).await,
