@@ -2,7 +2,7 @@ mod executor;
 mod policy;
 mod container;
 
-pub use executor::{SandboxExecutor, ExecutionResult};
+pub use executor::{SandboxExecutor, ExecutionResult, CommandCheck};
 pub use policy::{SandboxPolicy, Permission};
 pub use container::{SandboxContainer, ContainerState, ContainerError};
 
