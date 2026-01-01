@@ -1002,6 +1002,8 @@ dependencies = [
  "async-channel",
  "mms-common",
  "mms-config",
+ "mms-execpolicy",
+ "mms-linux-sandbox",
  "mms-protocol",
  "mms-tools",
  "serde",
