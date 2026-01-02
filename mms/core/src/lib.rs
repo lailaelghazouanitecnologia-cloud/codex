@@ -5,6 +5,7 @@ mod agent;
 pub mod approval;
 pub mod cancel;
 pub mod context;
+pub mod history;
 pub mod parallel;
 mod processor;
 pub mod retry;
@@ -19,6 +20,12 @@ pub use approval::{
 };
 pub use cancel::{CancellationToken, ChildCancellationToken, CancelledError, CancelOnDrop};
 pub use context::{ContextManager, ResponseItem, TokenUsageInfo, TruncationPolicy, ModelLimits};
+pub use history::{
+    ConversationManager, ConversationError, Conversation, InitialHistory as HistoryInitialHistory,
+    RolloutRecorder, RolloutItem, RolloutLine, SessionMeta,
+    UserMessageItem, AssistantMessageItem, ToolCallItem, ToolResultItem,
+    load_rollout_history, list_rollout_files, new_conversation_manager,
+};
 pub use parallel::{ParallelConfig, ParallelExecutor, ToolExecutionResult, DependentToolCall, ToolScheduler, execute_parallel, batch_by_dependency};
 pub use retry::{RetryConfig, RetryState, RetryableError, with_retry};
 pub use processor::{spawn_processor, Processor};

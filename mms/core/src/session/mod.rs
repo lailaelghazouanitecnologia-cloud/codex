@@ -32,7 +32,7 @@ use crate::state::StateManager;
 const CHANNEL_CAPACITY: usize = 64;
 
 /// Unique identifier for a conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ConversationId(u64);
 
 impl ConversationId {
