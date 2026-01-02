@@ -5,11 +5,13 @@
 //! - Collecting git information (commit, branch, remote)
 //! - Git diff tracking
 //! - Branch management
+//! - Turn-based diff tracking for undo functionality
 //!
 //! # Example
 //!
 //! ```ignore
 //! use mms_git::{collect_git_info, get_git_repo_root};
+//! use mms_git::turn_diff::TurnDiffTracker;
 //! use std::path::Path;
 //!
 //! let cwd = Path::new("/path/to/project");
@@ -23,11 +25,19 @@
 //!         println!("Branch: {:?}", info.branch);
 //!         println!("Commit: {:?}", info.commit_hash);
 //!     }
+//!
+//!     // Track changes during a turn
+//!     let mut tracker = TurnDiffTracker::new("turn_1", cwd);
+//!     tracker.record_modification("file.rs", Some("old content".to_string()));
+//!     let diff = tracker.finish();
+//!     println!("Changes: {}", diff.summary());
 //! }
 //! ```
 
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![forbid(unsafe_code)]
+
+pub mod turn_diff;
 
 use std::path::{Path, PathBuf};
 use std::process::Output;
