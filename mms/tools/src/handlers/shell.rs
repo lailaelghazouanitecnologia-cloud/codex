@@ -1,5 +1,8 @@
 use mms_execpolicy::{Evaluation, default_heuristics};
 use mms_linux_sandbox::{apply_sandbox_policy, is_sandbox_supported};
+use mms_shell::command_safety::{
+    is_dangerous_to_exec, is_known_safe_command, get_danger_reason,
+};
 use serde_json::json;
 use std::process::Stdio;
 use std::time::Instant;
@@ -25,6 +28,48 @@ impl ShellHandler {
         let shell = if cfg!(windows) { "cmd" } else { "sh" };
         let shell_arg = if cfg!(windows) { "/C" } else { "-c" };
         vec![shell.to_string(), shell_arg.to_string(), command.to_string()]
+    }
+
+    /// Get detailed safety analysis for a command.
+    pub fn analyze_command_safety(command: &str) -> CommandSafetyInfo {
+        let command_vec = Self::parse_command_to_vec(command);
+        let command_strs: Vec<&str> = command_vec.iter().map(|s| s.as_str()).collect();
+
+        let is_safe = is_known_safe_command(&command_strs);
+        let danger_pattern = is_dangerous_to_exec(&command_strs);
+        let danger_reason = get_danger_reason(&command_strs);
+
+        CommandSafetyInfo {
+            is_safe,
+            is_dangerous: danger_pattern.is_some(),
+            danger_reason,
+            severity: danger_pattern.map(|p| p.severity),
+        }
+    }
+}
+
+/// Detailed safety information for a command.
+#[derive(Debug, Clone)]
+pub struct CommandSafetyInfo {
+    /// Whether the command is known to be safe.
+    pub is_safe: bool,
+    /// Whether the command has dangerous patterns.
+    pub is_dangerous: bool,
+    /// Reason why the command is dangerous (if applicable).
+    pub danger_reason: Option<String>,
+    /// Severity level (1-5) if dangerous.
+    pub severity: Option<u8>,
+}
+
+impl CommandSafetyInfo {
+    /// Check if the command needs approval.
+    pub fn needs_approval(&self) -> bool {
+        self.is_dangerous || !self.is_safe
+    }
+
+    /// Check if the command should be forbidden.
+    pub fn is_forbidden(&self) -> bool {
+        self.severity.map(|s| s >= 5).unwrap_or(false)
     }
 }
 

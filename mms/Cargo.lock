@@ -1125,6 +1125,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "mms-common",
+ "mms-shell",
  "serde",
  "serde_json",
  "shell-words",
@@ -1276,6 +1277,7 @@ dependencies = [
  "mms-mcp-client",
  "mms-mcp-types",
  "mms-protocol",
+ "mms-shell",
  "regex",
  "serde",
  "serde_json",

@@ -150,7 +150,44 @@ impl Evaluation {
     }
 }
 
+/// Evaluate a command using comprehensive safety analysis.
+///
+/// Uses the command_safety module for detailed safe/dangerous detection,
+/// then maps the classification to an execution Decision.
 pub fn default_heuristics(command: &[String]) -> Decision {
+    use mms_shell::command_safety::is_dangerous_to_exec;
+    use mms_shell::is_known_safe_command;
+
+    if command.is_empty() {
+        return Decision::Forbidden;
+    }
+
+    // Convert to &str slice for command_safety functions
+    let command_strs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
+
+    // Check for dangerous commands first
+    if let Some(pattern) = is_dangerous_to_exec(&command_strs) {
+        // Critical severity (5) is forbidden
+        if pattern.severity >= 5 {
+            return Decision::Forbidden;
+        }
+        // Any dangerous pattern requires prompt
+        return Decision::Prompt;
+    }
+
+    // Check if command is known safe
+    if is_known_safe_command(&command_strs) {
+        return Decision::Allow;
+    }
+
+    // Unknown commands default to prompt
+    Decision::Prompt
+}
+
+/// Legacy heuristics for backwards compatibility.
+/// Uses simple program name matching without detailed analysis.
+#[allow(dead_code)]
+pub fn legacy_heuristics(command: &[String]) -> Decision {
     if command.is_empty() {
         return Decision::Forbidden;
     }

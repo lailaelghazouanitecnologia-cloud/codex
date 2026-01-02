@@ -18,7 +18,7 @@ pub use grep::GrepHandler;
 pub use list_dir::ListDirectoryHandler;
 pub use mcp_handler::{McpToolHandler, McpToolRegistry};
 pub use read_file::ReadFileHandler;
-pub use shell::ShellHandler;
+pub use shell::{ShellHandler, CommandSafetyInfo};
 pub use write_file::WriteFileHandler;
 
 use crate::registry::ToolRegistry;

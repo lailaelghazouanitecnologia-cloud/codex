@@ -8,6 +8,7 @@ license.workspace = true
 mms-common.workspace = true
 mms-protocol.workspace = true
 mms-config.workspace = true
+mms-shell.workspace = true
 mms-linux-sandbox.workspace = true
 mms-execpolicy.workspace = true
 mms-mcp-types.workspace = true
