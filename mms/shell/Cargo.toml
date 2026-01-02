@@ -1,0 +1,36 @@
+[package]
+name = "mms-shell"
+version = "0.1.0"
+edition = "2021"
+description = "Shell command parsing and execution for MMS agent"
+license = "MIT"
+
+[dependencies]
+mms-common = { path = "../common" }
+
+# Async runtime
+tokio = { workspace = true, features = ["process", "time"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Shell tokenization
+shell-words = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# System interaction
+which = "7"
+
+# Optional tree-sitter for advanced parsing
+tree-sitter = { version = "0.25", optional = true }
+tree-sitter-bash = { version = "0.25", optional = true }
+
+[features]
+default = []
+tree-sitter = ["dep:tree-sitter", "dep:tree-sitter-bash"]

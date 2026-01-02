@@ -18,6 +18,7 @@ members = [
     "linux-sandbox",
     "execpolicy",
     "auth",
+    "shell",
 ]
 resolver = "2"
 
@@ -45,6 +46,7 @@ mms-file-search = { path = "file-search" }
 mms-linux-sandbox = { path = "linux-sandbox" }
 mms-execpolicy = { path = "execpolicy" }
 mms-auth = { path = "auth" }
+mms-shell = { path = "shell" }
 
 anyhow = "1"
 thiserror = "2.0"
