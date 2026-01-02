@@ -2,7 +2,7 @@ mod client;
 mod connection;
 mod transport;
 
-pub use client::McpClient;
+pub use client::{McpClient, McpServerConfig};
 pub use connection::McpConnection;
 pub use transport::{StdioTransport, Transport};
 

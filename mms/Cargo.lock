@@ -922,6 +922,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs",
  "mms-common",
  "mms-config",
  "mms-core",
@@ -931,6 +932,7 @@ dependencies = [
  "mms-mcp-client",
  "mms-mcp-types",
  "mms-protocol",
+ "mms-tools",
  "serde",
  "serde_json",
  "shell-words",
@@ -1135,6 +1137,7 @@ dependencies = [
 name = "mms-tools"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-channel",
  "futures",
  "glob",
@@ -1142,12 +1145,15 @@ dependencies = [
  "mms-config",
  "mms-execpolicy",
  "mms-linux-sandbox",
+ "mms-mcp-client",
+ "mms-mcp-types",
  "mms-protocol",
  "regex",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "toml",
  "tracing",
 ]
 
