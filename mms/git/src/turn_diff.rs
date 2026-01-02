@@ -37,6 +37,8 @@
 //! ```
 
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,6 +47,231 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::GitResult;
+
+// ============================================================================
+// File Mode Tracking
+// ============================================================================
+
+/// Unix file mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FileMode(pub u32);
+
+impl FileMode {
+    /// Regular file (644).
+    pub const REGULAR: FileMode = FileMode(0o100644);
+
+    /// Executable file (755).
+    pub const EXECUTABLE: FileMode = FileMode(0o100755);
+
+    /// Symbolic link.
+    pub const SYMLINK: FileMode = FileMode(0o120000);
+
+    /// Directory.
+    pub const DIRECTORY: FileMode = FileMode(0o040000);
+
+    /// Check if this mode represents a regular file.
+    pub fn is_regular(&self) -> bool {
+        (self.0 & 0o170000) == 0o100000
+    }
+
+    /// Check if this mode represents an executable.
+    pub fn is_executable(&self) -> bool {
+        self.0 == Self::EXECUTABLE.0
+    }
+
+    /// Check if this mode represents a symlink.
+    pub fn is_symlink(&self) -> bool {
+        (self.0 & 0o170000) == 0o120000
+    }
+
+    /// Check if this mode represents a directory.
+    pub fn is_directory(&self) -> bool {
+        (self.0 & 0o170000) == 0o040000
+    }
+
+    /// Get file mode from filesystem.
+    #[cfg(unix)]
+    pub fn from_path(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::MetadataExt;
+
+        std::fs::symlink_metadata(path).ok().map(|m| {
+            let mode = m.mode();
+            // Normalize to git-style mode
+            if m.file_type().is_symlink() {
+                Self::SYMLINK
+            } else if m.is_dir() {
+                Self::DIRECTORY
+            } else if mode & 0o111 != 0 {
+                Self::EXECUTABLE
+            } else {
+                Self::REGULAR
+            }
+        })
+    }
+
+    /// Get file mode from filesystem (non-Unix always returns REGULAR).
+    #[cfg(not(unix))]
+    pub fn from_path(path: &Path) -> Option<Self> {
+        std::fs::symlink_metadata(path).ok().map(|m| {
+            if m.file_type().is_symlink() {
+                Self::SYMLINK
+            } else if m.is_dir() {
+                Self::DIRECTORY
+            } else {
+                Self::REGULAR
+            }
+        })
+    }
+
+    /// Format as git-style mode string.
+    pub fn as_git_mode(&self) -> &'static str {
+        match self.0 {
+            0o100644 => "100644",
+            0o100755 => "100755",
+            0o120000 => "120000",
+            0o040000 => "040000",
+            _ => "100644",
+        }
+    }
+}
+
+impl Default for FileMode {
+    fn default() -> Self {
+        Self::REGULAR
+    }
+}
+
+impl std::fmt::Display for FileMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:06o}", self.0)
+    }
+}
+
+// ============================================================================
+// Object ID (OID) Computation
+// ============================================================================
+
+/// Object ID for content hashing (similar to git blob SHA).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ObjectId(pub String);
+
+impl ObjectId {
+    /// Null OID for deleted/non-existent files.
+    pub const NULL: &'static str = "0000000000000000";
+
+    /// Compute OID from content (using fast hash, not SHA-1).
+    pub fn from_content(content: &str) -> Self {
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        Self(format!("{:016x}", hasher.finish()))
+    }
+
+    /// Compute OID from bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Self(format!("{:016x}", hasher.finish()))
+    }
+
+    /// Get null OID.
+    pub fn null() -> Self {
+        Self(Self::NULL.to_string())
+    }
+
+    /// Check if this is a null OID.
+    pub fn is_null(&self) -> bool {
+        self.0 == Self::NULL
+    }
+
+    /// Get short form (first 7 characters).
+    pub fn short(&self) -> &str {
+        &self.0[..7.min(self.0.len())]
+    }
+}
+
+impl std::fmt::Display for ObjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// ============================================================================
+// Baseline Snapshot
+// ============================================================================
+
+/// Snapshot of a file's state at the start of a turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSnapshot {
+    /// Path to the file.
+    pub path: PathBuf,
+
+    /// File mode at snapshot time.
+    pub mode: FileMode,
+
+    /// Object ID of content.
+    pub oid: ObjectId,
+
+    /// Full content (for undo).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+
+    /// Whether the file existed.
+    pub exists: bool,
+
+    /// Timestamp when snapshot was taken.
+    pub timestamp: u64,
+}
+
+impl FileSnapshot {
+    /// Take a snapshot of a file.
+    pub fn capture(path: impl Into<PathBuf>, workspace_root: &Path) -> Self {
+        let path = path.into();
+        let full_path = if path.is_absolute() {
+            path.clone()
+        } else {
+            workspace_root.join(&path)
+        };
+
+        if full_path.exists() && !full_path.is_dir() {
+            let content = std::fs::read_to_string(&full_path).ok();
+            let mode = FileMode::from_path(&full_path).unwrap_or_default();
+            let oid = content
+                .as_ref()
+                .map(|c| ObjectId::from_content(c))
+                .unwrap_or_else(ObjectId::null);
+
+            Self {
+                path,
+                mode,
+                oid,
+                content,
+                exists: true,
+                timestamp: current_timestamp(),
+            }
+        } else {
+            Self {
+                path,
+                mode: FileMode::default(),
+                oid: ObjectId::null(),
+                content: None,
+                exists: false,
+                timestamp: current_timestamp(),
+            }
+        }
+    }
+
+    /// Create a snapshot for a non-existent file.
+    pub fn non_existent(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            mode: FileMode::default(),
+            oid: ObjectId::null(),
+            content: None,
+            exists: false,
+            timestamp: current_timestamp(),
+        }
+    }
+}
 
 /// Type of file change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,9 +318,30 @@ pub struct FileChange {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_content: Option<String>,
 
+    /// New content after the change.
+    /// Only populated for creations and modifications.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_content: Option<String>,
+
     /// Original path for renames.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_path: Option<PathBuf>,
+
+    /// Original file mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_mode: Option<FileMode>,
+
+    /// New file mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_mode: Option<FileMode>,
+
+    /// Original object ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_oid: Option<ObjectId>,
+
+    /// New object ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_oid: Option<ObjectId>,
 
     /// Unix timestamp when the change was recorded.
     pub timestamp: u64,
@@ -110,7 +358,30 @@ impl FileChange {
             path: path.into(),
             change_type: ChangeType::Created,
             original_content: None,
+            new_content: None,
             original_path: None,
+            original_mode: None,
+            new_mode: Some(FileMode::REGULAR),
+            original_oid: None,
+            new_oid: None,
+            timestamp: current_timestamp(),
+            tool_call_id: None,
+        }
+    }
+
+    /// Create a new file creation record with content.
+    pub fn creation_with_content(path: impl Into<PathBuf>, content: String) -> Self {
+        let oid = ObjectId::from_content(&content);
+        Self {
+            path: path.into(),
+            change_type: ChangeType::Created,
+            original_content: None,
+            new_content: Some(content),
+            original_path: None,
+            original_mode: None,
+            new_mode: Some(FileMode::REGULAR),
+            original_oid: None,
+            new_oid: Some(oid),
             timestamp: current_timestamp(),
             tool_call_id: None,
         }
@@ -118,11 +389,40 @@ impl FileChange {
 
     /// Create a new file modification record.
     pub fn modification(path: impl Into<PathBuf>, original: Option<String>) -> Self {
+        let original_oid = original.as_ref().map(|c| ObjectId::from_content(c));
         Self {
             path: path.into(),
             change_type: ChangeType::Modified,
             original_content: original,
+            new_content: None,
             original_path: None,
+            original_mode: Some(FileMode::REGULAR),
+            new_mode: Some(FileMode::REGULAR),
+            original_oid,
+            new_oid: None,
+            timestamp: current_timestamp(),
+            tool_call_id: None,
+        }
+    }
+
+    /// Create a new file modification record with both contents.
+    pub fn modification_with_content(
+        path: impl Into<PathBuf>,
+        original: Option<String>,
+        new_content: String,
+    ) -> Self {
+        let original_oid = original.as_ref().map(|c| ObjectId::from_content(c));
+        let new_oid = ObjectId::from_content(&new_content);
+        Self {
+            path: path.into(),
+            change_type: ChangeType::Modified,
+            original_content: original,
+            new_content: Some(new_content),
+            original_path: None,
+            original_mode: Some(FileMode::REGULAR),
+            new_mode: Some(FileMode::REGULAR),
+            original_oid,
+            new_oid: Some(new_oid),
             timestamp: current_timestamp(),
             tool_call_id: None,
         }
@@ -130,11 +430,17 @@ impl FileChange {
 
     /// Create a new file deletion record.
     pub fn deletion(path: impl Into<PathBuf>, original: Option<String>) -> Self {
+        let original_oid = original.as_ref().map(|c| ObjectId::from_content(c));
         Self {
             path: path.into(),
             change_type: ChangeType::Deleted,
             original_content: original,
+            new_content: None,
             original_path: None,
+            original_mode: Some(FileMode::REGULAR),
+            new_mode: None,
+            original_oid,
+            new_oid: None,
             timestamp: current_timestamp(),
             tool_call_id: None,
         }
@@ -146,7 +452,12 @@ impl FileChange {
             path: new_path.into(),
             change_type: ChangeType::Renamed,
             original_content: None,
+            new_content: None,
             original_path: Some(old_path.into()),
+            original_mode: Some(FileMode::REGULAR),
+            new_mode: Some(FileMode::REGULAR),
+            original_oid: None,
+            new_oid: None,
             timestamp: current_timestamp(),
             tool_call_id: None,
         }
@@ -158,6 +469,21 @@ impl FileChange {
         self
     }
 
+    /// Set the file modes.
+    pub fn with_modes(mut self, original: Option<FileMode>, new: Option<FileMode>) -> Self {
+        self.original_mode = original;
+        self.new_mode = new;
+        self
+    }
+
+    /// Set from a baseline snapshot.
+    pub fn from_snapshot(mut self, snapshot: &FileSnapshot) -> Self {
+        self.original_content = snapshot.content.clone();
+        self.original_mode = Some(snapshot.mode);
+        self.original_oid = Some(snapshot.oid.clone());
+        self
+    }
+
     /// Check if this change can be undone.
     pub fn can_undo(&self) -> bool {
         match self.change_type {
@@ -166,6 +492,173 @@ impl FileChange {
             ChangeType::Deleted => self.original_content.is_some(),
             ChangeType::Renamed => self.original_path.is_some(),
         }
+    }
+
+    /// Check if file mode changed.
+    pub fn mode_changed(&self) -> bool {
+        match (&self.original_mode, &self.new_mode) {
+            (Some(old), Some(new)) => old != new,
+            _ => false,
+        }
+    }
+
+    /// Count lines added and removed.
+    pub fn line_counts(&self) -> (usize, usize) {
+        let old_lines = self
+            .original_content
+            .as_ref()
+            .map(|c| c.lines().count())
+            .unwrap_or(0);
+        let new_lines = self
+            .new_content
+            .as_ref()
+            .map(|c| c.lines().count())
+            .unwrap_or(0);
+
+        match self.change_type {
+            ChangeType::Created => (new_lines, 0),
+            ChangeType::Deleted => (0, old_lines),
+            ChangeType::Modified => {
+                // Simple approximation: if we have both, show the difference
+                if new_lines >= old_lines {
+                    (new_lines - old_lines, 0)
+                } else {
+                    (0, old_lines - new_lines)
+                }
+            }
+            ChangeType::Renamed => (0, 0),
+        }
+    }
+
+    /// Generate unified diff for this change.
+    pub fn unified_diff(&self) -> String {
+        let path_str = self.path.display();
+        let original_path_str = self
+            .original_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| path_str.to_string());
+
+        let old_oid = self
+            .original_oid
+            .as_ref()
+            .map(|o| o.short())
+            .unwrap_or(ObjectId::NULL);
+        let new_oid = self
+            .new_oid
+            .as_ref()
+            .map(|o| o.short())
+            .unwrap_or(ObjectId::NULL);
+
+        let old_mode = self
+            .original_mode
+            .as_ref()
+            .map(|m| m.as_git_mode())
+            .unwrap_or("000000");
+        let new_mode = self
+            .new_mode
+            .as_ref()
+            .map(|m| m.as_git_mode())
+            .unwrap_or("000000");
+
+        let mut diff = String::new();
+
+        // Header
+        match self.change_type {
+            ChangeType::Created => {
+                diff.push_str(&format!("diff --git a/{} b/{}\n", path_str, path_str));
+                diff.push_str(&format!("new file mode {}\n", new_mode));
+                diff.push_str(&format!(
+                    "index {}..{}\n",
+                    &ObjectId::NULL[..7],
+                    new_oid
+                ));
+                diff.push_str(&format!("--- /dev/null\n"));
+                diff.push_str(&format!("+++ b/{}\n", path_str));
+            }
+            ChangeType::Deleted => {
+                diff.push_str(&format!("diff --git a/{} b/{}\n", path_str, path_str));
+                diff.push_str(&format!("deleted file mode {}\n", old_mode));
+                diff.push_str(&format!(
+                    "index {}..{}\n",
+                    old_oid,
+                    &ObjectId::NULL[..7]
+                ));
+                diff.push_str(&format!("--- a/{}\n", path_str));
+                diff.push_str("+++ /dev/null\n");
+            }
+            ChangeType::Modified => {
+                diff.push_str(&format!("diff --git a/{} b/{}\n", path_str, path_str));
+                if self.mode_changed() {
+                    diff.push_str(&format!("old mode {}\n", old_mode));
+                    diff.push_str(&format!("new mode {}\n", new_mode));
+                }
+                diff.push_str(&format!("index {}..{} {}\n", old_oid, new_oid, new_mode));
+                diff.push_str(&format!("--- a/{}\n", path_str));
+                diff.push_str(&format!("+++ b/{}\n", path_str));
+            }
+            ChangeType::Renamed => {
+                diff.push_str(&format!(
+                    "diff --git a/{} b/{}\n",
+                    original_path_str, path_str
+                ));
+                diff.push_str(&format!("similarity index 100%\n"));
+                diff.push_str(&format!("rename from {}\n", original_path_str));
+                diff.push_str(&format!("rename to {}\n", path_str));
+            }
+        }
+
+        // Content diff
+        if self.change_type != ChangeType::Renamed {
+            diff.push_str(&self.content_diff());
+        }
+
+        diff
+    }
+
+    /// Generate the content portion of the diff.
+    fn content_diff(&self) -> String {
+        let old_lines: Vec<&str> = self
+            .original_content
+            .as_ref()
+            .map(|c| c.lines().collect())
+            .unwrap_or_default();
+        let new_lines: Vec<&str> = self
+            .new_content
+            .as_ref()
+            .map(|c| c.lines().collect())
+            .unwrap_or_default();
+
+        if old_lines.is_empty() && new_lines.is_empty() {
+            return String::new();
+        }
+
+        // Simple diff: show all old as removed, all new as added
+        // For a proper diff algorithm, we'd use something like diff-match-patch
+        let mut result = String::new();
+
+        let old_len = old_lines.len();
+        let new_len = new_lines.len();
+
+        if old_len > 0 || new_len > 0 {
+            result.push_str(&format!(
+                "@@ -{},{} +{},{} @@\n",
+                if old_len > 0 { 1 } else { 0 },
+                old_len,
+                if new_len > 0 { 1 } else { 0 },
+                new_len
+            ));
+        }
+
+        for line in &old_lines {
+            result.push_str(&format!("-{}\n", line));
+        }
+
+        for line in &new_lines {
+            result.push_str(&format!("+{}\n", line));
+        }
+
+        result
     }
 }
 
@@ -278,12 +771,91 @@ impl TurnDiff {
             parts.join(", ")
         }
     }
+
+    /// Generate unified diff for all changes.
+    ///
+    /// This produces a git-compatible unified diff format that can be
+    /// used for visualization or applied with `git apply`.
+    pub fn unified_diff(&self) -> String {
+        let mut diff = String::new();
+
+        for change in &self.changes {
+            if !diff.is_empty() {
+                diff.push('\n');
+            }
+            diff.push_str(&change.unified_diff());
+        }
+
+        diff
+    }
+
+    /// Generate a short diff stat (like `git diff --stat`).
+    pub fn diff_stat(&self) -> String {
+        let mut result = String::new();
+        let mut max_path_len = 0;
+
+        for change in &self.changes {
+            let path_len = change.path.display().to_string().len();
+            if path_len > max_path_len {
+                max_path_len = path_len;
+            }
+        }
+
+        for change in &self.changes {
+            let path = change.path.display().to_string();
+            let (added, removed) = change.line_counts();
+
+            result.push_str(&format!(
+                " {:<width$} | {:>4} {}{}\n",
+                path,
+                added + removed,
+                "+".repeat(added.min(10)),
+                "-".repeat(removed.min(10)),
+                width = max_path_len
+            ));
+
+            // For renames, show the original path
+            if change.change_type == ChangeType::Renamed {
+                if let Some(ref orig) = change.original_path {
+                    result.push_str(&format!(
+                        " {:<width$} | (renamed from {})\n",
+                        "",
+                        orig.display(),
+                        width = max_path_len
+                    ));
+                }
+            }
+        }
+
+        let total_files = self.changes.len();
+        let total_added: usize = self.changes.iter().map(|c| c.line_counts().0).sum();
+        let total_removed: usize = self.changes.iter().map(|c| c.line_counts().1).sum();
+
+        result.push_str(&format!(
+            " {} file{} changed, {} insertion{}(+), {} deletion{}(-)\n",
+            total_files,
+            if total_files == 1 { "" } else { "s" },
+            total_added,
+            if total_added == 1 { "" } else { "s" },
+            total_removed,
+            if total_removed == 1 { "" } else { "s" }
+        ));
+
+        result
+    }
 }
 
 /// Tracks file changes during a conversation turn.
 ///
 /// This tracker records all file modifications made by tool calls
 /// during a turn, enabling undo functionality.
+///
+/// ## Baseline Snapshots
+///
+/// The tracker captures file state before changes are made, enabling:
+/// - Accurate undo with original content
+/// - Unified diff generation with before/after comparison
+/// - File mode tracking for permission changes
 #[derive(Debug)]
 pub struct TurnDiffTracker {
     /// Turn identifier.
@@ -295,11 +867,17 @@ pub struct TurnDiffTracker {
     /// Recorded changes indexed by path.
     changes: HashMap<PathBuf, FileChange>,
 
+    /// Baseline snapshots of files before changes.
+    baselines: HashMap<PathBuf, FileSnapshot>,
+
     /// Start time of the turn.
     started_at: Instant,
 
     /// Whether tracking is active.
     active: bool,
+
+    /// Whether to capture file content in baselines.
+    capture_content: bool,
 }
 
 impl TurnDiffTracker {
@@ -309,8 +887,23 @@ impl TurnDiffTracker {
             turn_id: turn_id.into(),
             workspace_root: workspace_root.into(),
             changes: HashMap::new(),
+            baselines: HashMap::new(),
             started_at: Instant::now(),
             active: true,
+            capture_content: true,
+        }
+    }
+
+    /// Create a tracker without content capture (lighter weight).
+    pub fn without_content(turn_id: impl Into<String>, workspace_root: impl Into<PathBuf>) -> Self {
+        Self {
+            turn_id: turn_id.into(),
+            workspace_root: workspace_root.into(),
+            changes: HashMap::new(),
+            baselines: HashMap::new(),
+            started_at: Instant::now(),
+            active: true,
+            capture_content: false,
         }
     }
 
@@ -329,6 +922,48 @@ impl TurnDiffTracker {
         self.active
     }
 
+    /// Capture a baseline snapshot of a file before modification.
+    ///
+    /// This should be called before any modification to capture the original state.
+    pub fn capture_baseline(&mut self, path: impl Into<PathBuf>) {
+        if !self.active {
+            return;
+        }
+
+        let path = self.normalize_path(path.into());
+
+        // Only capture once per file per turn
+        if self.baselines.contains_key(&path) {
+            return;
+        }
+
+        let snapshot = if self.capture_content {
+            FileSnapshot::capture(&path, &self.workspace_root)
+        } else {
+            // Capture metadata only
+            let full_path = self.workspace_root.join(&path);
+            if full_path.exists() {
+                FileSnapshot {
+                    path: path.clone(),
+                    mode: FileMode::from_path(&full_path).unwrap_or_default(),
+                    oid: ObjectId::null(),
+                    content: None,
+                    exists: true,
+                    timestamp: current_timestamp(),
+                }
+            } else {
+                FileSnapshot::non_existent(&path)
+            }
+        };
+
+        self.baselines.insert(path, snapshot);
+    }
+
+    /// Get the baseline snapshot for a path.
+    pub fn get_baseline(&self, path: &Path) -> Option<&FileSnapshot> {
+        self.baselines.get(path)
+    }
+
     /// Record a file creation.
     pub fn record_creation(&mut self, path: impl Into<PathBuf>) {
         if !self.active {
@@ -336,7 +971,28 @@ impl TurnDiffTracker {
         }
 
         let path = self.normalize_path(path.into());
+
+        // Capture baseline (should be non-existent for creations)
+        self.capture_baseline(&path);
+
         let change = FileChange::creation(&path);
+        self.changes.insert(path, change);
+    }
+
+    /// Record a file creation with content.
+    pub fn record_creation_with_content(&mut self, path: impl Into<PathBuf>, content: String) {
+        if !self.active {
+            return;
+        }
+
+        let path = self.normalize_path(path.into());
+
+        // Capture baseline (should be non-existent for creations)
+        self.capture_baseline(&path);
+
+        let mode = FileMode::from_path(&self.workspace_root.join(&path));
+        let mut change = FileChange::creation_with_content(&path, content);
+        change.new_mode = mode.or(Some(FileMode::REGULAR));
         self.changes.insert(path, change);
     }
 
@@ -347,6 +1003,10 @@ impl TurnDiffTracker {
         }
 
         let path = self.normalize_path(path.into());
+
+        // Capture baseline
+        self.capture_baseline(&path);
+
         let change = FileChange::creation(&path).with_tool_call_id(tool_call_id);
         self.changes.insert(path, change);
     }
@@ -354,12 +1014,18 @@ impl TurnDiffTracker {
     /// Record a file modification.
     ///
     /// If `original_content` is provided, the change can be undone.
+    /// Prefer using `record_modification_with_content` for full diff support.
     pub fn record_modification(&mut self, path: impl Into<PathBuf>, original_content: Option<String>) {
         if !self.active {
             return;
         }
 
         let path = self.normalize_path(path.into());
+
+        // Capture baseline first (before any content changes)
+        if !self.baselines.contains_key(&path) {
+            self.capture_baseline(&path);
+        }
 
         // Don't overwrite creation with modification
         if let Some(existing) = self.changes.get(&path) {
@@ -368,7 +1034,69 @@ impl TurnDiffTracker {
             }
         }
 
-        let change = FileChange::modification(&path, original_content);
+        // Use baseline content if available and original_content not provided
+        let original = original_content.or_else(|| {
+            self.baselines.get(&path).and_then(|b| b.content.clone())
+        });
+
+        let baseline = self.baselines.get(&path);
+        let mut change = FileChange::modification(&path, original);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+        }
+
+        self.changes.insert(path, change);
+    }
+
+    /// Record a file modification with both original and new content.
+    pub fn record_modification_with_content(
+        &mut self,
+        path: impl Into<PathBuf>,
+        original_content: Option<String>,
+        new_content: String,
+    ) {
+        if !self.active {
+            return;
+        }
+
+        let path = self.normalize_path(path.into());
+
+        // Capture baseline first
+        if !self.baselines.contains_key(&path) {
+            self.capture_baseline(&path);
+        }
+
+        // Don't overwrite creation with modification
+        if let Some(existing) = self.changes.get(&path) {
+            if existing.change_type == ChangeType::Created {
+                // Update the new content on the creation record
+                let mut updated = existing.clone();
+                updated.new_content = Some(new_content.clone());
+                updated.new_oid = Some(ObjectId::from_content(&new_content));
+                self.changes.insert(path, updated);
+                return;
+            }
+        }
+
+        // Use baseline content if available and original_content not provided
+        let original = original_content.or_else(|| {
+            self.baselines.get(&path).and_then(|b| b.content.clone())
+        });
+
+        let baseline = self.baselines.get(&path);
+        let mut change = FileChange::modification_with_content(&path, original, new_content);
+
+        // Get current mode from filesystem
+        let new_mode = FileMode::from_path(&self.workspace_root.join(&path));
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+        }
+        change.new_mode = new_mode.or(Some(FileMode::REGULAR));
+
         self.changes.insert(path, change);
     }
 
@@ -385,6 +1113,11 @@ impl TurnDiffTracker {
 
         let path = self.normalize_path(path.into());
 
+        // Capture baseline first
+        if !self.baselines.contains_key(&path) {
+            self.capture_baseline(&path);
+        }
+
         // Don't overwrite creation with modification
         if let Some(existing) = self.changes.get(&path) {
             if existing.change_type == ChangeType::Created {
@@ -392,20 +1125,38 @@ impl TurnDiffTracker {
             }
         }
 
-        let change = FileChange::modification(&path, original_content)
+        // Use baseline content if available
+        let original = original_content.or_else(|| {
+            self.baselines.get(&path).and_then(|b| b.content.clone())
+        });
+
+        let baseline = self.baselines.get(&path);
+        let mut change = FileChange::modification(&path, original)
             .with_tool_call_id(tool_call_id);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+        }
+
         self.changes.insert(path, change);
     }
 
     /// Record a file deletion.
     ///
     /// If `original_content` is provided, the change can be undone.
+    /// Otherwise, will use baseline content if available.
     pub fn record_deletion(&mut self, path: impl Into<PathBuf>, original_content: Option<String>) {
         if !self.active {
             return;
         }
 
         let path = self.normalize_path(path.into());
+
+        // Capture baseline first (before deletion)
+        if !self.baselines.contains_key(&path) {
+            self.capture_baseline(&path);
+        }
 
         // If file was created in this turn, just remove the creation record
         if let Some(existing) = self.changes.get(&path) {
@@ -415,7 +1166,19 @@ impl TurnDiffTracker {
             }
         }
 
-        let change = FileChange::deletion(&path, original_content);
+        // Use baseline content if available
+        let original = original_content.or_else(|| {
+            self.baselines.get(&path).and_then(|b| b.content.clone())
+        });
+
+        let baseline = self.baselines.get(&path);
+        let mut change = FileChange::deletion(&path, original);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+        }
+
         self.changes.insert(path, change);
     }
 
@@ -432,6 +1195,11 @@ impl TurnDiffTracker {
 
         let path = self.normalize_path(path.into());
 
+        // Capture baseline first
+        if !self.baselines.contains_key(&path) {
+            self.capture_baseline(&path);
+        }
+
         // If file was created in this turn, just remove the creation record
         if let Some(existing) = self.changes.get(&path) {
             if existing.change_type == ChangeType::Created {
@@ -440,8 +1208,20 @@ impl TurnDiffTracker {
             }
         }
 
-        let change = FileChange::deletion(&path, original_content)
+        // Use baseline content if available
+        let original = original_content.or_else(|| {
+            self.baselines.get(&path).and_then(|b| b.content.clone())
+        });
+
+        let baseline = self.baselines.get(&path);
+        let mut change = FileChange::deletion(&path, original)
             .with_tool_call_id(tool_call_id);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+        }
+
         self.changes.insert(path, change);
     }
 
@@ -454,10 +1234,24 @@ impl TurnDiffTracker {
         let old_path = self.normalize_path(old_path.into());
         let new_path = self.normalize_path(new_path.into());
 
+        // Capture baseline of old path
+        if !self.baselines.contains_key(&old_path) {
+            self.capture_baseline(&old_path);
+        }
+
         // Remove old path record if exists
         self.changes.remove(&old_path);
 
-        let change = FileChange::rename(&old_path, &new_path);
+        let baseline = self.baselines.get(&old_path);
+        let mut change = FileChange::rename(&old_path, &new_path);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.new_mode = Some(baseline.mode); // Same mode after rename
+            change.original_oid = Some(baseline.oid.clone());
+            change.new_oid = Some(baseline.oid.clone()); // Same content after rename
+        }
+
         self.changes.insert(new_path, change);
     }
 
@@ -475,11 +1269,25 @@ impl TurnDiffTracker {
         let old_path = self.normalize_path(old_path.into());
         let new_path = self.normalize_path(new_path.into());
 
+        // Capture baseline of old path
+        if !self.baselines.contains_key(&old_path) {
+            self.capture_baseline(&old_path);
+        }
+
         // Remove old path record if exists
         self.changes.remove(&old_path);
 
-        let change = FileChange::rename(&old_path, &new_path)
+        let baseline = self.baselines.get(&old_path);
+        let mut change = FileChange::rename(&old_path, &new_path)
             .with_tool_call_id(tool_call_id);
+
+        if let Some(baseline) = baseline {
+            change.original_mode = Some(baseline.mode);
+            change.new_mode = Some(baseline.mode);
+            change.original_oid = Some(baseline.oid.clone());
+            change.new_oid = Some(baseline.oid.clone());
+        }
+
         self.changes.insert(new_path, change);
     }
 

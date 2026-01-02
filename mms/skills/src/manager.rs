@@ -10,6 +10,22 @@ use tracing::{debug, info};
 use crate::loader::{SkillError, SkillLoadOutcome, SkillLoader};
 use crate::model::{SkillMetadata, SkillInstructions, SkillsSummary};
 
+/// Information about installed system skills.
+#[derive(Debug, Clone)]
+pub struct SystemSkillsInfo {
+    /// List of installed system skill names.
+    pub installed_skills: Vec<String>,
+
+    /// Current installed fingerprint (if any).
+    pub current_fingerprint: Option<String>,
+
+    /// Expected fingerprint for embedded skills.
+    pub expected_fingerprint: String,
+
+    /// Whether the installed skills are up to date.
+    pub is_current: bool,
+}
+
 /// Manager for skill loading and caching.
 ///
 /// Caches skills per working directory to avoid repeated filesystem scans.
@@ -56,6 +72,9 @@ impl SkillManager {
     }
 
     /// Initialize the manager and install system skills if needed.
+    ///
+    /// Uses fingerprinting to avoid unnecessary reinstalls - skills are only
+    /// reinstalled when the embedded content changes.
     pub fn initialize(&mut self) -> Result<(), std::io::Error> {
         if !self.system_installed {
             self.install_system_skills()?;
@@ -64,72 +83,61 @@ impl SkillManager {
         Ok(())
     }
 
-    /// Install embedded system skills to the user's skill directory.
+    /// Install embedded system skills using fingerprinting.
+    ///
+    /// This uses the system module's fingerprinting to:
+    /// - Skip installation if skills are already up to date
+    /// - Reinstall if embedded content has changed
+    /// - Track installed version with a marker file
     fn install_system_skills(&self) -> Result<(), std::io::Error> {
         let Some(home) = &self.home_dir else {
             debug!("No home directory, skipping system skill installation");
             return Ok(());
         };
 
-        let system_dir = home.join(".codex").join("skills").join(".system");
+        let codex_home = home.join(".codex");
 
-        // Create system skills directory if it doesn't exist
-        if !system_dir.exists() {
-            std::fs::create_dir_all(&system_dir)?;
-            info!("Created system skills directory: {:?}", system_dir);
+        match crate::system::install_system_skills(&codex_home) {
+            Ok(true) => {
+                info!("System skills installed successfully");
+            }
+            Ok(false) => {
+                debug!("System skills already up to date, skipped installation");
+            }
+            Err(e) => {
+                // Log but don't fail - system skills are optional
+                tracing::warn!("Failed to install system skills: {}", e);
+            }
         }
-
-        // Install built-in skills
-        self.install_builtin_skills(&system_dir)?;
 
         Ok(())
     }
 
-    /// Install the built-in skills.
-    fn install_builtin_skills(&self, system_dir: &Path) -> Result<(), std::io::Error> {
-        use crate::builtin;
+    /// Check if system skills are installed and up to date.
+    pub fn system_skills_installed(&self) -> bool {
+        let Some(home) = &self.home_dir else {
+            return false;
+        };
+        let codex_home = home.join(".codex");
+        crate::system::is_installed(&codex_home)
+    }
 
-        // Help skill
-        let help_dir = system_dir.join("help");
-        if !help_dir.exists() {
-            std::fs::create_dir_all(&help_dir)?;
-            std::fs::write(help_dir.join("SKILL.md"), builtin::HELP_SKILL)?;
-            debug!("Installed help skill");
-        }
+    /// Get information about installed system skills.
+    pub fn system_skills_info(&self) -> Option<SystemSkillsInfo> {
+        let home = self.home_dir.as_ref()?;
+        let codex_home = home.join(".codex");
 
-        // Review skill
-        let review_dir = system_dir.join("review");
-        if !review_dir.exists() {
-            std::fs::create_dir_all(&review_dir)?;
-            std::fs::write(review_dir.join("SKILL.md"), builtin::REVIEW_SKILL)?;
-            debug!("Installed review skill");
-        }
+        let installed = crate::system::list_installed_skills(&codex_home).ok()?;
+        let current_fingerprint = crate::system::current_fingerprint(&codex_home);
+        let expected_fingerprint = crate::system::expected_fingerprint();
+        let is_current = current_fingerprint.as_ref() == Some(&expected_fingerprint);
 
-        // Compact skill
-        let compact_dir = system_dir.join("compact");
-        if !compact_dir.exists() {
-            std::fs::create_dir_all(&compact_dir)?;
-            std::fs::write(compact_dir.join("SKILL.md"), builtin::COMPACT_SKILL)?;
-            debug!("Installed compact skill");
-        }
-
-        // Undo skill
-        let undo_dir = system_dir.join("undo");
-        if !undo_dir.exists() {
-            std::fs::create_dir_all(&undo_dir)?;
-            std::fs::write(undo_dir.join("SKILL.md"), builtin::UNDO_SKILL)?;
-            debug!("Installed undo skill");
-        }
-
-        // Create skill (meta-skill for creating new skills)
-        let create_dir = system_dir.join("create-skill");
-        if !create_dir.exists() {
-            std::fs::create_dir_all(&create_dir)?;
-            std::fs::write(create_dir.join("SKILL.md"), builtin::CREATE_SKILL)?;
-            debug!("Installed create-skill skill");
-        }
-
-        Ok(())
+        Some(SystemSkillsInfo {
+            installed_skills: installed,
+            current_fingerprint,
+            expected_fingerprint,
+            is_current,
+        })
     }
 
     /// Get skills for a specific working directory.

@@ -79,13 +79,21 @@ pub mod model;
 pub mod registry;
 pub mod render;
 mod skill;
+pub mod system;
 
 // Re-export main types
 pub use loader::{SkillError, SkillLoadOutcome, SkillLoader};
-pub use manager::{SharedSkillManager, SkillManager, new_shared_manager};
+pub use manager::{SharedSkillManager, SkillManager, SystemSkillsInfo, new_shared_manager};
 pub use model::{SkillInstructions, SkillMetadata, SkillScope, SkillsSummary};
 pub use registry::SkillRegistry;
 pub use skill::{Skill, SkillContext, SkillOutput, SkillSpec};
+
+// Re-export system skill functions
+pub use system::{
+    install_system_skills, uninstall_system_skills, list_installed_skills,
+    is_installed as system_skills_installed, current_fingerprint, expected_fingerprint,
+    system_cache_root_dir,
+};
 
 /// Prelude for commonly used types.
 pub mod prelude {
