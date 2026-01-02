@@ -1,9 +1,16 @@
 mod client;
 mod connection;
+mod manager;
 mod transport;
 
 pub use client::{McpClient, McpServerConfig};
 pub use connection::McpConnection;
+pub use manager::{
+    McpConnectionManager, McpServerConfiguration, McpStartupCompleteEvent,
+    McpStartupEvent, McpStartupStatus, SharedMcpConnectionManager, StartupError,
+    ToolFilter, ToolInfo, DEFAULT_STARTUP_TIMEOUT, DEFAULT_TOOL_TIMEOUT,
+    new_mcp_connection_manager,
+};
 pub use transport::{StdioTransport, Transport};
 
 pub const MCP_TOOL_NAME_PREFIX: &str = "mcp";
