@@ -20,6 +20,7 @@ members = [
     "auth",
     "shell",
     "git",
+    "tasks",
 ]
 resolver = "2"
 
@@ -49,6 +50,7 @@ mms-execpolicy = { path = "execpolicy" }
 mms-auth = { path = "auth" }
 mms-shell = { path = "shell" }
 mms-git = { path = "git" }
+mms-tasks = { path = "tasks" }
 
 anyhow = "1"
 thiserror = "2.0"
