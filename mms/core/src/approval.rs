@@ -249,3 +249,117 @@ pub async fn cancel_all(manager: &SharedApprovalManager) {
     mgr.cancel_all();
 }
 
+/// Store of approval history for tools.
+///
+/// Tracks which tools have been approved/rejected to allow
+/// "always allow" or "always deny" behavior.
+#[derive(Debug, Default)]
+pub struct ApprovalStore {
+    /// Tools that are always allowed.
+    always_allow: HashMap<String, AllowedTool>,
+    /// Tools that are always denied.
+    always_deny: HashMap<String, DeniedTool>,
+}
+
+/// An always-allowed tool entry.
+#[derive(Debug, Clone)]
+pub struct AllowedTool {
+    /// Tool name.
+    pub tool_name: String,
+    /// Optional command pattern.
+    pub command_pattern: Option<String>,
+    /// When it was allowed.
+    pub allowed_at: std::time::Instant,
+}
+
+/// An always-denied tool entry.
+#[derive(Debug, Clone)]
+pub struct DeniedTool {
+    /// Tool name.
+    pub tool_name: String,
+    /// Reason for denial.
+    pub reason: Option<String>,
+    /// When it was denied.
+    pub denied_at: std::time::Instant,
+}
+
+impl ApprovalStore {
+    /// Create a new approval store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a tool to always allow.
+    pub fn always_allow(&mut self, tool_name: String, command_pattern: Option<String>) {
+        // Remove from deny list if present
+        self.always_deny.remove(&tool_name);
+
+        self.always_allow.insert(
+            tool_name.clone(),
+            AllowedTool {
+                tool_name,
+                command_pattern,
+                allowed_at: std::time::Instant::now(),
+            },
+        );
+    }
+
+    /// Add a tool to always deny.
+    pub fn always_deny(&mut self, tool_name: String, reason: Option<String>) {
+        // Remove from allow list if present
+        self.always_allow.remove(&tool_name);
+
+        self.always_deny.insert(
+            tool_name.clone(),
+            DeniedTool {
+                tool_name,
+                reason,
+                denied_at: std::time::Instant::now(),
+            },
+        );
+    }
+
+    /// Check if a tool is always allowed.
+    pub fn is_allowed(&self, tool_name: &str) -> bool {
+        self.always_allow.contains_key(tool_name)
+    }
+
+    /// Check if a tool is always denied.
+    pub fn is_denied(&self, tool_name: &str) -> bool {
+        self.always_deny.contains_key(tool_name)
+    }
+
+    /// Get approval decision based on stored rules.
+    pub fn get_decision(&self, tool_name: &str) -> Option<ReviewDecision> {
+        if self.is_allowed(tool_name) {
+            Some(ReviewDecision::Approved)
+        } else if self.is_denied(tool_name) {
+            Some(ReviewDecision::Rejected)
+        } else {
+            None
+        }
+    }
+
+    /// Clear a specific tool from both allow and deny lists.
+    pub fn clear(&mut self, tool_name: &str) {
+        self.always_allow.remove(tool_name);
+        self.always_deny.remove(tool_name);
+    }
+
+    /// Clear all stored approvals.
+    pub fn clear_all(&mut self) {
+        self.always_allow.clear();
+        self.always_deny.clear();
+    }
+
+    /// Get count of always-allowed tools.
+    pub fn allowed_count(&self) -> usize {
+        self.always_allow.len()
+    }
+
+    /// Get count of always-denied tools.
+    pub fn denied_count(&self) -> usize {
+        self.always_deny.len()
+    }
+}
+

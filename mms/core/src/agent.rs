@@ -23,7 +23,7 @@ impl Agent {
         let mut registry = ToolRegistry::new();
         register_default_handlers(&mut registry);
 
-        let session = Session::new(config, registry)?;
+        let mut session = Session::new(config, registry)?;
         let session_id = session.id();
 
         session.start().await?;

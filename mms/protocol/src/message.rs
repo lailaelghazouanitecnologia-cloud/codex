@@ -1,21 +1,57 @@
 use serde::{Deserialize, Serialize};
 
-use crate::session::SessionState;
+use crate::session::{ApprovalMode, SessionId, SessionState};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EventMessage {
+    /// Session has been configured and is ready.
+    SessionConfigured(SessionConfiguredEvent),
+    /// Session has started (legacy).
     SessionStarted(SessionStartedEvent),
+    /// Session state has changed.
     SessionStateChanged(SessionStateChangedEvent),
+    /// Agent is thinking/reasoning.
     AgentThinking(AgentThinkingEvent),
+    /// Agent has produced a complete message.
     AgentMessage(AgentMessageEvent),
+    /// Agent message content delta (streaming).
     AgentMessageDelta(AgentMessageDeltaEvent),
+    /// Agent reasoning section break.
+    AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent),
+    /// Reasoning content delta.
+    ReasoningContentDelta(ReasoningContentDeltaEvent),
+    /// Tool call has started.
     ToolCallStarted(ToolCallStartedEvent),
+    /// Tool call has completed.
     ToolCallCompleted(ToolCallCompletedEvent),
+    /// Approval is required for an action.
     ApprovalRequired(ApprovalRequiredEvent),
+    /// Token count update.
+    TokenCount(TokenCountEvent),
+    /// Rate limit information.
+    RateLimit(RateLimitEvent),
+    /// Error occurred.
     Error(ErrorEvent),
+    /// Warning message.
     Warning(WarningEvent),
+    /// Turn has completed.
     TurnCompleted(TurnCompletedEvent),
+    /// Deprecation notice.
+    DeprecationNotice(DeprecationNoticeEvent),
+    /// Background event from tools.
+    BackgroundEvent(BackgroundEventEvent),
+    /// Session shutdown complete.
     ShutdownComplete,
+}
+
+/// Session configured event - sent when session is ready.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfiguredEvent {
+    pub session_id: SessionId,
+    pub model: String,
+    pub provider: String,
+    pub approval_policy: ApprovalMode,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,4 +138,50 @@ pub struct TurnCompletedEvent {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub duration_ms: u64,
+}
+
+/// Agent reasoning section break event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentReasoningSectionBreakEvent {
+    pub section_type: String,
+}
+
+/// Reasoning content delta event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningContentDeltaEvent {
+    pub delta: String,
+    pub is_raw: bool,
+}
+
+/// Token count event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenCountEvent {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub context_window: Option<u64>,
+}
+
+/// Rate limit event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitEvent {
+    pub requests_limit: Option<i64>,
+    pub requests_remaining: Option<i64>,
+    pub tokens_limit: Option<i64>,
+    pub tokens_remaining: Option<i64>,
+    pub reset_at: Option<String>,
+}
+
+/// Deprecation notice event.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeprecationNoticeEvent {
+    pub summary: String,
+    pub details: Option<String>,
+}
+
+/// Background event from tools.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackgroundEventEvent {
+    pub event_type: String,
+    pub data: serde_json::Value,
 }

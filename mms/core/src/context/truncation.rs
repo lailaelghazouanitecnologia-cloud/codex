@@ -210,6 +210,23 @@ pub struct ModelLimits {
 }
 
 impl ModelLimits {
+    /// Get model limits for a given model name
+    pub fn for_model(model: &str) -> Self {
+        if model.starts_with("gpt-4o") {
+            Self::gpt4o()
+        } else if model.starts_with("gpt-4") {
+            Self::gpt4()
+        } else if model.starts_with("claude-3-5") || model.starts_with("claude-3.5") {
+            Self::claude35_sonnet()
+        } else if model.starts_with("claude-3") || model.starts_with("claude-") {
+            Self::claude3()
+        } else if model.contains("llama") || model.contains("mistral") || model.contains("mixtral") {
+            Self::llama()
+        } else {
+            Self::default()
+        }
+    }
+
     /// GPT-4 family limits
     pub fn gpt4() -> Self {
         Self {
@@ -247,6 +264,26 @@ impl ModelLimits {
             auto_compact_threshold: 150_000,
             tool_output_bytes: 50_000,
             max_output_tokens: 8_192,
+        }
+    }
+
+    /// Llama/Mistral family limits
+    pub fn llama() -> Self {
+        Self {
+            context_window: 32_000,
+            auto_compact_threshold: 24_000,
+            tool_output_bytes: 30_000,
+            max_output_tokens: 4_096,
+        }
+    }
+
+    /// Groq limits (for fast inference models)
+    pub fn groq() -> Self {
+        Self {
+            context_window: 8_000,
+            auto_compact_threshold: 6_000,
+            tool_output_bytes: 20_000,
+            max_output_tokens: 2_048,
         }
     }
 

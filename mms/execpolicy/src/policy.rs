@@ -8,6 +8,7 @@ use crate::error::{PolicyError, PolicyResult};
 use crate::pattern::{CommandPattern, PatternToken};
 use crate::rule::{PrefixRule, Rule, RuleMatch, RuleRef};
 
+#[derive(Clone)]
 pub struct Policy {
     rules_by_program: HashMap<String, Vec<RuleRef>>,
     default_decision: Decision,

@@ -784,6 +784,8 @@ checksum = "0ad4bb2b565bca0645f4d68c5c9af97fba094e9791da685bf83cb5f3ce74acf2"
 dependencies = [
  "equivalent",
  "hashbrown",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
@@ -981,15 +983,19 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "futures",
+ "indexmap",
  "mms-common",
  "mms-config",
  "mms-exec",
+ "mms-execpolicy",
  "mms-protocol",
  "mms-providers",
  "mms-tools",
  "serde",
  "serde_json",
+ "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1027,10 +1033,13 @@ dependencies = [
 name = "mms-execpolicy"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "mms-common",
  "serde",
  "serde_json",
+ "shell-words",
  "thiserror 2.0.17",
+ "tokio",
  "toml",
 ]
 
@@ -1887,6 +1896,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

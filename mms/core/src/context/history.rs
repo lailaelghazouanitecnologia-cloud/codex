@@ -14,7 +14,7 @@ use super::token::{RateLimitSnapshot, TokenUsageInfo};
 use super::truncation::{ModelLimits, TruncationPolicy};
 
 /// Manages conversation history with token tracking
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ContextManager {
     /// The conversation history items
     items: Vec<ResponseItem>,
@@ -141,6 +141,11 @@ impl ContextManager {
     /// Get current token usage
     pub fn token_info(&self) -> &TokenUsageInfo {
         &self.token_info
+    }
+
+    /// Get a copy of current token usage
+    pub fn get_token_usage(&self) -> TokenUsageInfo {
+        self.token_info.clone()
     }
 
     /// Update rate limits

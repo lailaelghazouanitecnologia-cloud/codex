@@ -135,3 +135,60 @@ impl Default for ApprovalMode {
         Self::OnDanger
     }
 }
+
+/// Sandbox policy for command execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SandboxPolicy {
+    /// No sandboxing.
+    None,
+    /// Linux-only sandboxing (landlock).
+    Landlock,
+    /// macOS-only sandboxing (seatbelt).
+    Seatbelt,
+    /// Docker container isolation.
+    Docker,
+    /// Custom sandbox command.
+    Custom(String),
+}
+
+impl Default for SandboxPolicy {
+    fn default() -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            Self::Landlock
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::Seatbelt
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            Self::None
+        }
+    }
+}
+
+/// Source of the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionSource {
+    /// CLI interactive mode.
+    Cli,
+    /// VS Code extension.
+    VsCode,
+    /// Exec (non-interactive) mode.
+    Exec,
+    /// MCP server mode.
+    Mcp,
+    /// Web UI / Tauri.
+    Web,
+    /// API client.
+    Api,
+    /// Unknown source.
+    Unknown,
+}
+
+impl Default for SessionSource {
+    fn default() -> Self {
+        Self::Cli
+    }
+}

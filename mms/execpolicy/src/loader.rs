@@ -17,7 +17,7 @@ pub struct PolicyFile {
     pub rules: Vec<RuleEntry>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct PolicySettings {
     #[serde(default)]
     pub default: Option<Decision>,
