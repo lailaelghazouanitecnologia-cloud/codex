@@ -36,7 +36,7 @@
 | Directory list | ✅ list_dir.rs | ✅ tool handlers | None |
 | Background tasks | ✅ background.rs | ✅ exec crate | None |
 | MCP handler | ✅ mcp_handler.rs | ✅ mcp integration | None |
-| **Command safety analysis** | ❌ | ✅ is_dangerous_command | **MISSING** |
+| Command safety analysis | ✅ command_safety/ | ✅ is_dangerous_command | None |
 | **Parse command (lossy)** | ❌ | ✅ parse.rs | **MISSING** |
 
 ### Providers & LLM
@@ -92,7 +92,7 @@
 | Branch/commit info | ✅ | ✅ | None |
 | Diff tracking | ✅ | ✅ | None |
 | Remote management | ✅ | ✅ | None |
-| **Turn diff tracker** | ❌ | ✅ TurnDiffTracker | **MISSING** |
+| Turn diff tracker | ✅ turn_diff.rs | ✅ TurnDiffTracker | None |
 
 ### User Interface
 | Feature | MMS | Legacy | Gap |
@@ -105,10 +105,11 @@
 ### Skills System
 | Feature | MMS | Legacy | Gap |
 |---------|-----|--------|-----|
-| **Skill trait/registry** | ⚠️ Stub only | ✅ skills crate | Partial |
-| **Slash commands** | ❌ | ✅ SkillLoader | **MISSING** |
-| **Skill injection** | ❌ | ✅ skill_injection | **MISSING** |
-| **Built-in skills** | ❌ | ✅ /help, /review, etc. | **MISSING** |
+| Skill trait/registry | ✅ SkillRegistry | ✅ skills crate | None |
+| Skill loader | ✅ SkillLoader | ✅ SkillLoader | None |
+| Skill manager | ✅ SkillManager | ✅ skill_manager | None |
+| Built-in skills | ✅ builtin.rs | ✅ /help, /review, etc. | None |
+| Skill rendering | ✅ render.rs | ✅ render skills | None |
 
 ### Task System
 | Feature | MMS | Legacy | Gap |
@@ -141,23 +142,18 @@
 
 ### P0 - Critical (Core Functionality Gaps)
 
-1. **Skills System** - `/home/user/codex/mms/skills/`
-   - Implement SkillLoader for slash command files (.md)
-   - Add skill injection for context
-   - Built-in skills: /help, /review, /compact
-   - ~1,500 lines estimated
+1. ~~**Skills System**~~ - ✅ COMPLETED
+   - SkillLoader, SkillManager, built-in skills
+   - ~1,200 lines implemented
 
-2. **Command Safety Analysis** - `/home/user/codex/mms/shell/`
-   - `is_dangerous_command()` detection
-   - `is_safe_command()` whitelist
-   - Command classification for approval
-   - ~500 lines estimated
+2. ~~**Command Safety Analysis**~~ - ✅ COMPLETED
+   - Safe command whitelist, dangerous pattern detection
+   - Command classification with approval policies
+   - ~1,000 lines implemented
 
-3. **TUI Interface** - New `tui` crate
-   - ratatui-based interactive mode
-   - Streaming response display
-   - Input handling and history
-   - ~3,000 lines estimated
+3. **TUI Interface** - New `tui` crate (SKIPPED per user request)
+   - Not implementing TUI interface
+   - Focus on core CLI functionality
 
 ### P1 - High Priority (Important Features)
 
@@ -168,11 +164,11 @@
    - GhostSnapshot for state capture
    - ~2,000 lines estimated
 
-5. **Turn Diff Tracker** - `/home/user/codex/mms/git/`
+5. ~~**Turn Diff Tracker**~~ - ✅ COMPLETED
    - Track file changes per turn
-   - Enable undo functionality
-   - Diff visualization
-   - ~600 lines estimated
+   - Enable undo functionality with SharedTurnDiffTracker
+   - Integrated with tool handlers
+   - ~800 lines implemented
 
 6. **Seatbelt Sandbox (macOS)** - New `macos-sandbox` crate
    - macOS sandbox-exec integration
