@@ -16,3 +16,8 @@ tokio.workspace = true
 async-channel.workspace = true
 tracing.workspace = true
 futures.workspace = true
+glob = "0.3"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

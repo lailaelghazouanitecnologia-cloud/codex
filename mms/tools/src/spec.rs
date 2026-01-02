@@ -67,6 +67,10 @@ impl ToolCall {
     pub fn get_u64(&self, key: &str) -> Option<u64> {
         self.arguments.get(key).and_then(|v| v.as_u64())
     }
+
+    pub fn get_i64(&self, key: &str) -> Option<i64> {
+        self.arguments.get(key).and_then(|v| v.as_i64())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

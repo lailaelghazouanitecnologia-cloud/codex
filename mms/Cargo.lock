@@ -1137,13 +1137,16 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "futures",
+ "glob",
  "mms-common",
  "mms-config",
  "mms-execpolicy",
  "mms-linux-sandbox",
  "mms-protocol",
+ "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
