@@ -360,27 +360,3 @@ impl CommandBuilder {
 pub fn shell_escape(s: &str) -> String {
     shell_words::quote(s).into_owned()
 }
-
-/// Check if a command is safe (no dangerous characters).
-pub fn is_safe_command(command: &str) -> bool {
-    // Check for potentially dangerous patterns
-    let dangerous_patterns = [
-        "rm -rf /",
-        "rm -rf ~",
-        "rm -rf /*",
-        "mkfs",
-        "dd if=",
-        "> /dev/sd",
-        ":(){ :|:& };:",
-        "chmod -R 777 /",
-        "chown -R",
-    ];
-
-    for pattern in &dangerous_patterns {
-        if command.contains(pattern) {
-            return false;
-        }
-    }
-
-    true
-}
