@@ -1273,6 +1273,7 @@ dependencies = [
  "mms-common",
  "mms-config",
  "mms-execpolicy",
+ "mms-git",
  "mms-linux-sandbox",
  "mms-mcp-client",
  "mms-mcp-types",

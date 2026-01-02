@@ -1,6 +1,9 @@
 //! Edit file handler for precise line-based modifications.
 //!
 //! This tool performs exact string replacement in files, similar to Claude Code's Edit tool.
+//!
+//! When a turn diff tracker is configured, all modifications are recorded
+//! with the original content for potential undo operations.
 
 use serde_json::json;
 use std::time::Instant;
@@ -13,6 +16,9 @@ use crate::spec::{ToolCall, ToolOutput, ToolSpec};
 ///
 /// This tool finds an exact string in a file and replaces it with a new string.
 /// The old_string must be unique in the file for the edit to succeed.
+///
+/// All modifications are recorded in the turn diff tracker (if configured)
+/// for undo functionality.
 pub struct EditFileHandler;
 
 impl ToolHandler for EditFileHandler {
@@ -52,11 +58,12 @@ impl ToolHandler for EditFileHandler {
         let replace_all = call.get_bool("replace_all").unwrap_or(false);
         let resolved_path = ctx.resolve_path(&path);
         let call_id = call.id.clone();
+        let ctx = ctx.clone();
 
         Box::pin(async move {
             let start = Instant::now();
 
-            // Read the file
+            // Read the file (keep original for undo)
             let content = tokio::fs::read_to_string(&resolved_path)
                 .await
                 .map_err(|e| mms_common::AgentError::Io { source: e })?;
@@ -102,6 +109,13 @@ impl ToolHandler for EditFileHandler {
             tokio::fs::write(&resolved_path, &new_content)
                 .await
                 .map_err(|e| mms_common::AgentError::Io { source: e })?;
+
+            // Record the modification in the diff tracker
+            ctx.record_file_modification(
+                &resolved_path,
+                Some(content.clone()),
+                Some(&call_id),
+            ).await;
 
             let duration_ms = start.elapsed().as_millis() as u64;
             let replacements = if replace_all {
